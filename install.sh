@@ -426,6 +426,17 @@ step "Impostazione permessi"
 chown -R "$APP_USER:$APP_USER" "$APP_DIR"
 chmod -R 750 "$APP_DIR"
 chmod 600 "$APP_DIR/backend/.env"
+
+# Il frontend/dist deve essere leggibile da nginx (www-data)
+# Le directory superiori devono avere il bit execute per la traversal
+chmod o+x "$APP_DIR"
+chmod o+x "$APP_DIR/frontend"
+find "$APP_DIR/frontend/dist" -type d -exec chmod 755 {} \;
+find "$APP_DIR/frontend/dist" -type f -exec chmod 644 {} \;
+
+# Aggiungi www-data al gruppo smtpflow come ulteriore fallback
+usermod -aG "$APP_USER" www-data 2>/dev/null || true
+
 mkdir -p /var/log/smtpflow
 chown -R "$APP_USER:$APP_USER" /var/log/smtpflow
 
