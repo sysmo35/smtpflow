@@ -2,6 +2,7 @@ const { SMTPServer } = require('smtp-server');
 const { simpleParser } = require('mailparser');
 const cheerio = require('cheerio');
 const { v4: uuidv4 } = require('uuid');
+const fs = require('fs');
 const db = require('../database');
 const config = require('../config');
 const logger = require('../logger');
@@ -73,6 +74,26 @@ async function incrementUsage(userId) {
   );
 }
 
+function loadTLSOptions() {
+  const hostname = config.smtp.hostname;
+  const certPath = `/etc/letsencrypt/live/${hostname}/fullchain.pem`;
+  const keyPath  = `/etc/letsencrypt/live/${hostname}/privkey.pem`;
+  try {
+    if (fs.existsSync(certPath) && fs.existsSync(keyPath)) {
+      logger.info(`SMTP TLS: using Let\'s Encrypt cert for ${hostname}`);
+      return {
+        cert: fs.readFileSync(certPath),
+        key:  fs.readFileSync(keyPath),
+        minVersion: 'TLSv1.2',
+      };
+    }
+  } catch (e) {
+    logger.warn('SMTP TLS: failed to load Let\'s Encrypt cert, using self-signed', e.message);
+  }
+  logger.warn(`SMTP TLS: cert not found at ${certPath}, using self-signed`);
+  return { minVersion: 'TLSv1.2', rejectUnauthorized: false };
+}
+
 function createSMTPServer(port, secure = false) {
   const server = new SMTPServer({
     name: config.smtp.hostname,
@@ -82,9 +103,7 @@ function createSMTPServer(port, secure = false) {
     authMethods: ['PLAIN', 'LOGIN'],
     allowInsecureAuth: false,
     disabledCommands: secure ? [] : [],
-    tls: {
-      rejectUnauthorized: false,
-    },
+    tls: loadTLSOptions(),
 
     onAuth(auth, session, callback) {
       const { username, password } = auth.credentials;
