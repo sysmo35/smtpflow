@@ -97,6 +97,9 @@ function loadTLSOptions() {
 }
 
 function createSMTPServer(port, secure = false) {
+  // smtp-server passa this.options (non this.options.tls) a getTLSOptions(),
+  // quindi cert/key devono essere al livello principale, non dentro tls: {}
+  const tlsOpts = loadTLSOptions();
   const server = new SMTPServer({
     name: config.smtp.hostname,
     banner: 'SMTPFlow Mail Server',
@@ -105,7 +108,7 @@ function createSMTPServer(port, secure = false) {
     authMethods: ['PLAIN', 'LOGIN'],
     allowInsecureAuth: false,
     disabledCommands: secure ? [] : [],
-    tls: loadTLSOptions(),
+    ...tlsOpts,
 
     onAuth(auth, session, callback) {
       const { username, password } = auth.credentials;
