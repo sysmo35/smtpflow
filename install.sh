@@ -102,25 +102,37 @@ apt-get install -y -qq \
   postgresql postgresql-contrib \
   redis-server \
   certbot python3-certbot-nginx \
-  ufw fail2ban \
-  pm2 2>/dev/null || true
+  ufw fail2ban || error "Installazione pacchetti di sistema fallita"
 
 success "Pacchetti di sistema installati"
 
 # ── Install Node.js 20 ────────────────────────────────────────
 step "Installazione Node.js $NODE_VERSION"
 if ! command -v node &>/dev/null || [[ "$(node -v | cut -d. -f1 | tr -d 'v')" -lt "$NODE_VERSION" ]]; then
-  curl -fsSL https://deb.nodesource.com/setup_${NODE_VERSION}.x | bash - 2>/dev/null
-  apt-get install -y nodejs 2>/dev/null
+  curl -fsSL https://deb.nodesource.com/setup_${NODE_VERSION}.x | bash -
+  apt-get install -y nodejs || error "Installazione Node.js fallita"
 fi
-# Install PM2 globally
-npm install -g pm2 2>/dev/null || true
+command -v node &>/dev/null || error "Node.js non trovato dopo l'installazione"
+# Install PM2 globally (npm package, non apt)
+npm install -g pm2 || error "Installazione PM2 globale fallita"
 success "Node.js $(node -v) installato"
 
 # ── PostgreSQL setup ──────────────────────────────────────────
 step "Configurazione PostgreSQL"
-systemctl enable postgresql --quiet
-systemctl start postgresql
+
+# Rileva il nome del servizio PostgreSQL (varia per versione/distro)
+PG_SERVICE=""
+if systemctl list-unit-files | grep -q "^postgresql\.service"; then
+  PG_SERVICE="postgresql"
+elif systemctl list-unit-files | grep -qE "^postgresql@[0-9]+-main\.service"; then
+  PG_SERVICE=$(systemctl list-unit-files | grep -oE "postgresql@[0-9]+-main" | head -1)
+fi
+
+[[ -z "$PG_SERVICE" ]] && error "PostgreSQL non trovato. Verifica che 'postgresql postgresql-contrib' siano installati."
+
+systemctl enable "$PG_SERVICE" --quiet
+systemctl start "$PG_SERVICE"
+systemctl is-active --quiet "$PG_SERVICE" || error "PostgreSQL non si è avviato correttamente"
 
 sudo -u postgres psql -c "SELECT 1 FROM pg_roles WHERE rolname='smtpflow'" | grep -q 1 || \
   sudo -u postgres psql -c "CREATE USER smtpflow WITH PASSWORD '${DB_PASS}';"
@@ -133,6 +145,7 @@ success "PostgreSQL configurato"
 step "Configurazione Redis"
 systemctl enable redis-server --quiet
 systemctl start redis-server
+systemctl is-active --quiet redis-server || error "Redis non si è avviato correttamente"
 success "Redis configurato"
 
 # ── Create app user and directories ───────────────────────────
