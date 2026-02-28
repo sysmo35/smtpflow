@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { getCredentials, resetCredentials } from '../../api';
-import { Copy, RefreshCw, Eye, EyeOff, Server, Lock, User, Globe, Zap, ShieldCheck } from 'lucide-react';
+import { getCredentials, resetCredentials, getDomains } from '../../api';
+import { Copy, RefreshCw, Eye, EyeOff, Server, Lock, User, Globe, Zap, ShieldCheck, KeyRound } from 'lucide-react';
 import toast from 'react-hot-toast';
 
 function CopyField({ label, value, secret = false, icon: Icon }) {
@@ -42,13 +42,17 @@ function CopyField({ label, value, secret = false, icon: Icon }) {
 
 export default function Credentials() {
   const [creds, setCreds] = useState(null);
+  const [domains, setDomains] = useState([]);
   const [loading, setLoading] = useState(true);
   const [resetting, setResetting] = useState(false);
   const [showResetModal, setShowResetModal] = useState(false);
 
   useEffect(() => {
-    getCredentials()
-      .then(res => setCreds(res.data))
+    Promise.all([getCredentials(), getDomains()])
+      .then(([credsRes, domainsRes]) => {
+        setCreds(credsRes.data);
+        setDomains(domainsRes.data.filter(d => d.dkim_public_key && d.dkim_public_key !== 'generation-failed'));
+      })
       .catch(() => toast.error('Errore nel caricamento'))
       .finally(() => setLoading(false));
   }, []);
@@ -139,6 +143,72 @@ export default function Credentials() {
 
         <CopyField label="Valore (Value)" value={creds?.spf_record} icon={ShieldCheck} />
       </div>
+
+      {/* DKIM Records */}
+      {domains.length > 0 && (
+        <div className="card space-y-4">
+          <div className="flex items-center gap-3 pb-4 border-b border-slate-200 dark:border-slate-700/50">
+            <div className="p-2.5 bg-violet-500/15 rounded-xl">
+              <KeyRound size={18} className="text-violet-500" />
+            </div>
+            <div>
+              <h3 className="font-semibold text-slate-800 dark:text-slate-200">Record DKIM</h3>
+              <p className="text-xs text-slate-500">Firma digitale per autenticare le email — aggiungi questo record TXT nel DNS del tuo dominio</p>
+            </div>
+          </div>
+
+          <div className="bg-violet-50 dark:bg-violet-900/10 border border-violet-200 dark:border-violet-700/30 rounded-xl p-3.5 text-xs text-violet-700 dark:text-violet-400">
+            Il record DKIM migliora la consegna nelle caselle Gmail e Outlook e riduce la probabilità che le email finiscano in spam.
+          </div>
+
+          <div className="space-y-5">
+            {domains.map(domain => (
+              <div key={domain.id} className="space-y-3">
+                {domains.length > 1 && (
+                  <p className="text-xs font-semibold text-slate-600 dark:text-slate-400 uppercase tracking-wider">{domain.domain}</p>
+                )}
+                <div className="grid grid-cols-3 gap-x-4 gap-y-2 text-xs text-slate-500 mb-1">
+                  <div>
+                    <p className="uppercase tracking-wider mb-1 font-medium">Tipo</p>
+                    <code className="bg-slate-100 dark:bg-slate-900/50 border border-slate-200 dark:border-slate-700 rounded-lg px-2.5 py-1.5 text-slate-700 dark:text-slate-300 font-mono">TXT</code>
+                  </div>
+                  <div className="col-span-2">
+                    <p className="uppercase tracking-wider mb-1 font-medium">Host / Name</p>
+                    <div className="flex items-center gap-2">
+                      <code className="bg-slate-100 dark:bg-slate-900/50 border border-slate-200 dark:border-slate-700 rounded-lg px-2.5 py-1.5 text-slate-700 dark:text-slate-300 font-mono flex-1 truncate">
+                        {domain.dkim_selector || 'smtpflow'}._domainkey
+                      </code>
+                      <button
+                        onClick={() => { navigator.clipboard.writeText(`${domain.dkim_selector || 'smtpflow'}._domainkey`); toast.success('Copiato!'); }}
+                        className="p-2.5 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 border border-slate-200 dark:border-slate-700 rounded-xl transition-colors text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200 shrink-0"
+                      >
+                        <Copy size={15} />
+                      </button>
+                    </div>
+                  </div>
+                </div>
+                <CopyField
+                  label="Valore (Value)"
+                  value={`v=DKIM1; h=sha256; k=rsa; p=${domain.dkim_public_key}`}
+                  icon={KeyRound}
+                />
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {domains.length === 0 && (
+        <div className="card border-dashed border-slate-300 dark:border-slate-700">
+          <div className="flex items-center gap-3">
+            <KeyRound size={18} className="text-slate-400 shrink-0" />
+            <div>
+              <p className="text-sm font-medium text-slate-600 dark:text-slate-400">Nessun dominio configurato</p>
+              <p className="text-xs text-slate-500 mt-0.5">Aggiungi un dominio nella pagina <a href="/domains" className="text-brand-500 hover:underline">Domini</a> per ottenere il record DKIM.</p>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Quick copy all */}
       <div className="card">
