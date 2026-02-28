@@ -111,7 +111,9 @@ function createSMTPServer(port, secure = false) {
     ...tlsOpts,
 
     onAuth(auth, session, callback) {
-      const { username, password } = auth.credentials;
+      // smtp-server v3 usa auth.username/auth.password (v2 usava auth.credentials)
+      const username = auth.username || (auth.credentials && auth.credentials.username);
+      const password = auth.password || (auth.credentials && auth.credentials.password);
       getUserByCredentials(username, password)
         .then(user => {
           if (!user) {
