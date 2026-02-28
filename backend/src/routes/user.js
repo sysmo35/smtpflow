@@ -292,7 +292,7 @@ router.delete('/domains/:id', async (req, res) => {
 });
 
 function getDnsRecords(domain, domainRow, spfRecord) {
-  return [
+  const records = [
     {
       type: 'TXT',
       host: '@',
@@ -301,6 +301,26 @@ function getDnsRecords(domain, domainRow, spfRecord) {
       required: true,
     },
   ];
+
+  if (domainRow.dkim_public_key && domainRow.dkim_public_key !== 'generation-failed') {
+    records.push({
+      type: 'TXT',
+      host: `${domainRow.dkim_selector || 'smtpflow'}._domainkey`,
+      value: `v=DKIM1; h=sha256; k=rsa; p=${domainRow.dkim_public_key}`,
+      description: 'DKIM — firma digitale per autenticare le email',
+      required: false,
+    });
+  }
+
+  records.push({
+    type: 'TXT',
+    host: '_dmarc',
+    value: `v=DMARC1; p=none; rua=mailto:dmarc@${domain}`,
+    description: 'DMARC — policy di autenticazione email (opzionale)',
+    required: false,
+  });
+
+  return records;
 }
 
 module.exports = router;
