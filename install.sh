@@ -209,10 +209,7 @@ RELAY_PORT=25
 RELAY_SECURE=false
 RELAY_TLS_REJECT_UNAUTHORIZED=false
 
-# DKIM multi-dominio
-DKIM_KEYS_DIR=${APP_DIR}/dkim-keys
-DKIM_MODE=vps
-DKIM_SYNC_SCRIPT=${APP_DIR}/sync-dkim.sh
+# DKIM — chiave unica server-wide (approccio CNAME, come Mailgun/Brevo)
 
 # Bounce handling
 BOUNCE_SECRET=${BOUNCE_SECRET}
@@ -283,12 +280,11 @@ systemctl restart postfix
 systemctl enable postfix --quiet
 success "Postfix configurato (submission 587 abilitato)"
 
-# ── Configure OpenDKIM (multi-dominio) ────────────────────────
-step "Configurazione OpenDKIM multi-dominio"
+# ── Configure OpenDKIM (chiave unica server-wide, approccio CNAME) ───────────
+step "Configurazione OpenDKIM"
 
-DKIM_KEYS_DIR="${APP_DIR}/dkim-keys"
-mkdir -p "$DKIM_KEYS_DIR" /etc/opendkim/keys
-chown "${APP_USER}:${APP_USER}" "$DKIM_KEYS_DIR"
+DKIM_KEY_DIR="/etc/opendkim/keys/${DOMAIN}"
+mkdir -p "$DKIM_KEY_DIR"
 
 cat > /etc/opendkim.conf << EOF
 AutoRestart             Yes
@@ -314,58 +310,16 @@ localhost
 ${DOMAIN}
 EOF
 
-# Script di sincronizzazione DKIM (eseguito da Node.js via sudo)
-# Legge le chiavi da dkim-keys/ e aggiorna la config OpenDKIM
-cat > "${APP_DIR}/sync-dkim.sh" << 'SYNC_SCRIPT'
-#!/bin/bash
-# Sincronizza le chiavi DKIM dal volume dell'app a OpenDKIM
-# Eseguito come root via sudo da dkimManager.js
-set -e
+# Genera la chiave DKIM del server (una sola, usata per tutti i domini clienti)
+opendkim-genkey -b 2048 -d "${DOMAIN}" -D "${DKIM_KEY_DIR}" -s smtpflow 2>/dev/null || true
+chown -R opendkim:opendkim "${DKIM_KEY_DIR}"
+chmod 600 "${DKIM_KEY_DIR}/smtpflow.private"
 
-DKIM_KEYS_DIR="APP_DIR_PLACEHOLDER/dkim-keys"
-OPENDKIM_KEYS="/etc/opendkim/keys"
-KEY_TABLE="/etc/opendkim/KeyTable"
-SIGNING_TABLE="/etc/opendkim/SigningTable"
+# KeyTable: unica entry per il server
+echo "smtpflow._domainkey.${DOMAIN} ${DOMAIN}:smtpflow:${DKIM_KEY_DIR}/smtpflow.private" > /etc/opendkim/KeyTable
 
-> "$KEY_TABLE"
-> "$SIGNING_TABLE"
-
-for domain_dir in "$DKIM_KEYS_DIR"/*/; do
-    [[ -d "$domain_dir" ]] || continue
-    domain=$(basename "$domain_dir")
-    src_key="$domain_dir/smtpflow.private"
-    [[ -f "$src_key" ]] || continue
-
-    dest_dir="$OPENDKIM_KEYS/$domain"
-    mkdir -p "$dest_dir"
-    cp "$src_key" "$dest_dir/smtpflow.private"
-    chown opendkim:opendkim "$dest_dir/smtpflow.private"
-    chmod 600 "$dest_dir/smtpflow.private"
-
-    echo "smtpflow._domainkey.$domain $domain:smtpflow:$dest_dir/smtpflow.private" >> "$KEY_TABLE"
-    echo "*@$domain smtpflow._domainkey.$domain" >> "$SIGNING_TABLE"
-done
-
-systemctl reload opendkim
-echo "DKIM sync: $(wc -l < "$KEY_TABLE") domains"
-SYNC_SCRIPT
-
-sed -i "s|APP_DIR_PLACEHOLDER|${APP_DIR}|g" "${APP_DIR}/sync-dkim.sh"
-chmod 750 "${APP_DIR}/sync-dkim.sh"
-chown root:root "${APP_DIR}/sync-dkim.sh"
-
-# Sudoers: permette a smtpflow di eseguire solo sync-dkim.sh come root
-echo "${APP_USER} ALL=(ALL) NOPASSWD: ${APP_DIR}/sync-dkim.sh" > /etc/sudoers.d/smtpflow-dkim
-chmod 440 /etc/sudoers.d/smtpflow-dkim
-
-# Genera la chiave DKIM per il dominio principale del server
-mkdir -p "${DKIM_KEYS_DIR}/${DOMAIN}"
-opendkim-genkey -b 2048 -d "${DOMAIN}" -D "${DKIM_KEYS_DIR}/${DOMAIN}" -s smtpflow -v 2>/dev/null || true
-# opendkim-genkey genera "smtpflow.private" — nome già corretto
-chown -R "${APP_USER}:${APP_USER}" "${DKIM_KEYS_DIR}"
-
-# Prima sync
-bash "${APP_DIR}/sync-dkim.sh"
+# SigningTable: firma TUTTI i domini con la chiave del server (wildcard)
+echo "* smtpflow._domainkey.${DOMAIN}" > /etc/opendkim/SigningTable
 
 # Collega Postfix a OpenDKIM
 postconf -e "milter_protocol = 6"
@@ -376,7 +330,7 @@ postconf -e "non_smtpd_milters = inet:localhost:12301"
 systemctl enable opendkim --quiet 2>/dev/null || true
 systemctl restart opendkim 2>/dev/null || true
 systemctl restart postfix
-success "OpenDKIM multi-dominio configurato"
+success "OpenDKIM configurato (chiave server-wide)"
 
 # ── Configure Nginx ───────────────────────────────────────────
 step "Configurazione Nginx"
@@ -504,10 +458,7 @@ cat > /etc/logrotate.d/smtpflow << 'EOF'
 EOF
 
 # ── Print summary ─────────────────────────────────────────────
-DKIM_PUBLIC=""
-if [[ -f "/etc/opendkim/keys/${DOMAIN}/smtpflow.txt" ]]; then
-  DKIM_PUBLIC=$(cat "/etc/opendkim/keys/${DOMAIN}/smtpflow.txt" 2>/dev/null || echo "Vedi /etc/opendkim/keys/${DOMAIN}/smtpflow.txt")
-fi
+DKIM_TXT_FILE="/etc/opendkim/keys/${DOMAIN}/smtpflow.txt"
 
 echo ""
 echo -e "${GREEN}${BOLD}════════════════════════════════════════════════════════"
@@ -530,14 +481,20 @@ echo -e "  User:       smtpflow"
 echo -e "  Pass:       ${YELLOW}${DB_PASS}${NC}"
 echo ""
 echo -e "${BOLD}Record DNS da configurare sul dominio ${DOMAIN}:${NC}"
-echo -e "  ${CYAN}Tipo  Host                              Valore${NC}"
-echo -e "  A     ${DOMAIN}                 <IP del server>"
-echo -e "  MX    ${DOMAIN}                 10 ${DOMAIN}"
-echo -e "  TXT   ${DOMAIN}                 v=spf1 a:${DOMAIN} ~all"
-if [[ -f "${APP_DIR}/dkim-keys/${DOMAIN}/smtpflow.txt" ]]; then
-  echo -e "  TXT   smtpflow._domainkey.${DOMAIN}"
-  echo -e "        $(grep -oP '".*?"' "${APP_DIR}/dkim-keys/${DOMAIN}/smtpflow.txt" | tr -d '"' | tr -d '\n' 2>/dev/null || echo "(vedi ${APP_DIR}/dkim-keys/${DOMAIN}/smtpflow.txt)")"
+echo -e "  ${CYAN}Tipo   Host                                  Valore${NC}"
+echo -e "  A      ${DOMAIN}                     <IP del server>"
+echo -e "  MX     ${DOMAIN}                     10 ${DOMAIN}"
+echo -e "  TXT    ${DOMAIN}                     v=spf1 a:${DOMAIN} ~all"
+if [[ -f "$DKIM_TXT_FILE" ]]; then
+  DKIM_VAL=$(grep -oP '".*?"' "$DKIM_TXT_FILE" | tr -d '"' | tr -d '\n' 2>/dev/null)
+  echo -e "  TXT    smtpflow._domainkey.${DOMAIN}"
+  echo -e "         ${DKIM_VAL}"
 fi
+echo -e ""
+echo -e "${BOLD}Record DNS che i tuoi clienti devono aggiungere (per ogni loro dominio):${NC}"
+echo -e "  ${CYAN}Tipo   Host                    Valore${NC}"
+echo -e "  TXT    @                       v=spf1 include:_spf.${DOMAIN} ~all"
+echo -e "  CNAME  smtpflow._domainkey     smtpflow._domainkey.${DOMAIN}"
 echo -e ""
 echo -e "  ${YELLOW}⚠  PTR (rDNS): configura il record PTR dell'IP del server → ${DOMAIN}${NC}"
 echo -e "     (impostalo nel pannello del provider VPS/cloud)"

@@ -3,7 +3,7 @@ const crypto = require('crypto');
 const db = require('../database');
 const { authenticate } = require('../middleware/auth');
 const config = require('../config');
-const { registerDomainDkim, removeDomainDkim } = require('../services/dkimManager');
+const { removeDomainDkim } = require('../services/dkimManager');
 
 const router = express.Router();
 router.use(authenticate);
@@ -183,26 +183,13 @@ router.post('/domains', async (req, res) => {
   }
 
   try {
-    // Generate DKIM keypair
-    let dkimPublicKey = '', dkimPrivateKey = '', selector = 'smtpflow';
-    try {
-      const { generateKeyPairSync } = require('crypto');
-      const { privateKey, publicKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
-      // OpenDKIM richiede formato PKCS#1 (RSA tradizionale)
-      dkimPrivateKey = privateKey.export({ type: 'pkcs1', format: 'pem' }).toString();
-      const pubKeyDer = publicKey.export({ type: 'spki', format: 'der' });
-      dkimPublicKey = pubKeyDer.toString('base64');
-    } catch (e) {
-      dkimPublicKey = 'generation-failed';
-    }
-
     const verificationToken = crypto.randomBytes(16).toString('hex');
 
     const [{ rows }, spfRecord] = await Promise.all([
       db.query(
-        `INSERT INTO domains (user_id, domain, dkim_selector, dkim_public_key, dkim_private_key, verification_token)
-         VALUES ($1,$2,$3,$4,$5,$6) RETURNING id, domain, status, dkim_selector, dkim_public_key, verification_token, created_at`,
-        [req.user.id, domain.toLowerCase(), selector, dkimPublicKey, dkimPrivateKey, verificationToken]
+        `INSERT INTO domains (user_id, domain, dkim_selector, verification_token)
+         VALUES ($1,$2,$3,$4) RETURNING id, domain, status, dkim_selector, verification_token, created_at`,
+        [req.user.id, domain.toLowerCase(), 'smtpflow', verificationToken]
       ),
       getSpfRecord(),
     ]);
@@ -239,10 +226,16 @@ router.post('/domains/:id/verify', async (req, res) => {
     const mxRecords = await dns.resolveMx(domain.domain).catch(() => []);
     mxVerified = mxRecords.length > 0;
 
-    // Check DKIM
+    // Check DKIM — il cliente deve aggiungere un CNAME verso smtpflow._domainkey.<hostname>
+    // oppure un TXT con v=DKIM1 (entrambi accettati)
     try {
-      const dkimTxt = await dns.resolveTxt(`${domain.dkim_selector}._domainkey.${domain.domain}`);
-      dkimVerified = dkimTxt.some(r => r.join('').includes('v=DKIM1'));
+      const cnameRecords = await dns.resolveCname(`smtpflow._domainkey.${domain.domain}`).catch(() => null);
+      if (cnameRecords && cnameRecords.some(r => r.includes(`smtpflow._domainkey.${config.smtp.hostname}`))) {
+        dkimVerified = true;
+      } else {
+        const dkimTxt = await dns.resolveTxt(`smtpflow._domainkey.${domain.domain}`).catch(() => []);
+        dkimVerified = dkimTxt.some(r => r.join('').includes('v=DKIM1'));
+      }
     } catch (e) {
       dkimVerified = false;
     }
@@ -258,11 +251,6 @@ router.post('/domains/:id/verify', async (req, res) => {
     ),
     getSpfRecord(),
   ]);
-
-  // Registra chiave DKIM in OpenDKIM quando il dominio è verificato
-  if (spfVerified && domain.dkim_private_key) {
-    await registerDomainDkim(domain.domain, domain.dkim_private_key);
-  }
 
   res.json({ ...updated[0], dns_records: getDnsRecords(domain.domain, updated[0], spfRecord) });
 });
@@ -292,35 +280,30 @@ router.delete('/domains/:id', async (req, res) => {
 });
 
 function getDnsRecords(domain, domainRow, spfRecord) {
-  const records = [
+  const hostname = config.smtp.hostname;
+  return [
     {
       type: 'TXT',
       host: '@',
-      value: spfRecord || `v=spf1 include:_spf.${config.smtp.hostname} ~all`,
+      value: spfRecord || `v=spf1 include:_spf.${hostname} ~all`,
       description: 'SPF — autorizza il server ad inviare email per questo dominio',
       required: true,
     },
-  ];
-
-  if (domainRow.dkim_public_key && domainRow.dkim_public_key !== 'generation-failed') {
-    records.push({
-      type: 'TXT',
-      host: `${domainRow.dkim_selector || 'smtpflow'}._domainkey`,
-      value: `v=DKIM1; h=sha256; k=rsa; p=${domainRow.dkim_public_key}`,
-      description: 'DKIM — firma digitale per autenticare le email',
+    {
+      type: 'CNAME',
+      host: 'smtpflow._domainkey',
+      value: `smtpflow._domainkey.${hostname}`,
+      description: 'DKIM — firma digitale (punta alla chiave del server)',
       required: false,
-    });
-  }
-
-  records.push({
-    type: 'TXT',
-    host: '_dmarc',
-    value: `v=DMARC1; p=none; rua=mailto:dmarc@${domain}`,
-    description: 'DMARC — policy di autenticazione email (opzionale)',
-    required: false,
-  });
-
-  return records;
+    },
+    {
+      type: 'TXT',
+      host: '_dmarc',
+      value: `v=DMARC1; p=none; rua=mailto:dmarc@${domain}`,
+      description: 'DMARC — policy di autenticazione email (opzionale)',
+      required: false,
+    },
+  ];
 }
 
 module.exports = router;
