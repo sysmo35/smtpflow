@@ -382,30 +382,25 @@ step "Configurazione Nginx"
 rm -f /etc/nginx/sites-enabled/default 2>/dev/null || true
 
 # Install config (HTTP first, HTTPS after certbot)
+# Nginx fa da reverse proxy completo verso Node.js (porta 3000)
+# che serve sia le API che il frontend React in production
 cat > "/etc/nginx/sites-available/smtpflow" << NGINX_HTTP
 server {
     listen 80;
     server_name ${DOMAIN};
 
-    location /api/ {
+    client_max_body_size 20M;
+
+    location / {
         proxy_pass http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection 'upgrade';
         proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto \$scheme;
-    }
-
-    location /t/ {
-        proxy_pass http://127.0.0.1:3000;
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        add_header Cache-Control "no-store";
-    }
-
-    location / {
-        root ${APP_DIR}/frontend/dist;
-        try_files \$uri \$uri/ /index.html;
+        proxy_cache_bypass \$http_upgrade;
     }
 }
 NGINX_HTTP
