@@ -371,6 +371,29 @@ if [[ "$SSL_CHOICE" =~ ^[Yy] ]]; then
   step "Installazione certificato SSL Let's Encrypt"
   certbot --nginx -d "$DOMAIN" --non-interactive --agree-tos -m "$ADMIN_EMAIL" --redirect 2>/dev/null || \
     warn "Certbot fallito. Configurare SSL manualmente."
+
+  # Copia cert in /opt/smtpflow/ssl/ leggibile dall'utente smtpflow
+  # (i file in /etc/letsencrypt/archive/ sono 600 root — non accessibili al processo)
+  SSL_DIR="${APP_DIR}/ssl"
+  CERT_SRC="/etc/letsencrypt/live/${DOMAIN}"
+  if [[ -f "${CERT_SRC}/fullchain.pem" ]]; then
+    cp "${CERT_SRC}/fullchain.pem" "${SSL_DIR}/fullchain.pem"
+    cp "${CERT_SRC}/privkey.pem"   "${SSL_DIR}/privkey.pem"
+    chown "${APP_USER}:${APP_USER}" "${SSL_DIR}/fullchain.pem" "${SSL_DIR}/privkey.pem"
+    chmod 640 "${SSL_DIR}/fullchain.pem" "${SSL_DIR}/privkey.pem"
+
+    # Hook per il rinnovo automatico
+    cat > /etc/letsencrypt/renewal-hooks/deploy/smtpflow.sh << RENEW_HOOK
+#!/bin/bash
+cp ${CERT_SRC}/fullchain.pem ${SSL_DIR}/fullchain.pem
+cp ${CERT_SRC}/privkey.pem   ${SSL_DIR}/privkey.pem
+chown ${APP_USER}:${APP_USER} ${SSL_DIR}/fullchain.pem ${SSL_DIR}/privkey.pem
+chmod 640 ${SSL_DIR}/fullchain.pem ${SSL_DIR}/privkey.pem
+pm2 restart smtpflow
+RENEW_HOOK
+    chmod +x /etc/letsencrypt/renewal-hooks/deploy/smtpflow.sh
+    info "Certificato TLS copiato in ${SSL_DIR}/"
+  fi
 fi
 
 # ── Permissions ───────────────────────────────────────────────
