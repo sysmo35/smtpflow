@@ -76,22 +76,24 @@ async function incrementUsage(userId) {
 
 function loadTLSOptions() {
   const hostname = config.smtp.hostname;
-  const certPath = `/etc/letsencrypt/live/${hostname}/fullchain.pem`;
-  const keyPath  = `/etc/letsencrypt/live/${hostname}/privkey.pem`;
-  try {
-    if (fs.existsSync(certPath) && fs.existsSync(keyPath)) {
-      logger.info(`SMTP TLS: using Let\'s Encrypt cert for ${hostname}`);
-      return {
-        cert: fs.readFileSync(certPath),
-        key:  fs.readFileSync(keyPath),
-        minVersion: 'TLSv1.2',
-      };
+  const candidates = [
+    { cert: process.env.TLS_CERT, key: process.env.TLS_KEY },
+    { cert: `/etc/letsencrypt/live/${hostname}/fullchain.pem`, key: `/etc/letsencrypt/live/${hostname}/privkey.pem` },
+    { cert: `/opt/smtpflow/ssl/fullchain.pem`, key: `/opt/smtpflow/ssl/privkey.pem` },
+  ];
+  for (const { cert, key } of candidates) {
+    if (!cert || !key) continue;
+    try {
+      const certData = fs.readFileSync(cert);
+      const keyData  = fs.readFileSync(key);
+      logger.info(`SMTP TLS: using cert from ${cert}`);
+      return { cert: certData, key: keyData, minVersion: 'TLSv1.2' };
+    } catch (e) {
+      // try next candidate
     }
-  } catch (e) {
-    logger.warn('SMTP TLS: failed to load Let\'s Encrypt cert, using self-signed', e.message);
   }
-  logger.warn(`SMTP TLS: cert not found at ${certPath}, using self-signed`);
-  return { minVersion: 'TLSv1.2', rejectUnauthorized: false };
+  logger.warn('SMTP TLS: no cert found, using self-signed (TLS may not work correctly)');
+  return { minVersion: 'TLSv1.2' };
 }
 
 function createSMTPServer(port, secure = false) {
