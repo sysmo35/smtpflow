@@ -92,6 +92,13 @@ export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
 apt-get upgrade -y -qq
 
+# Aggiungi repo Rspamd ufficiale
+CODENAME=$(lsb_release -cs 2>/dev/null || echo "bookworm")
+curl -s https://rspamd.com/apt-stable/gpg.key | gpg --dearmor -o /usr/share/keyrings/rspamd.gpg 2>/dev/null || true
+echo "deb [signed-by=/usr/share/keyrings/rspamd.gpg] https://rspamd.com/apt-stable/ ${CODENAME} main" \
+  > /etc/apt/sources.list.d/rspamd.list
+apt-get update -qq 2>/dev/null || true
+
 apt-get install -y -qq \
   curl wget gnupg2 lsb-release ca-certificates \
   software-properties-common apt-transport-https \
@@ -102,6 +109,7 @@ apt-get install -y -qq \
   postgresql postgresql-contrib \
   redis-server \
   certbot python3-certbot-nginx \
+  rspamd \
   ufw fail2ban || error "Installazione pacchetti di sistema fallita"
 
 success "Pacchetti di sistema installati"
@@ -280,6 +288,62 @@ systemctl restart postfix
 systemctl enable postfix --quiet
 success "Postfix configurato (submission 587 abilitato)"
 
+# ── Bounce handling ────────────────────────────────────────────
+step "Configurazione bounce handling"
+
+# Script che Postfix chiama per ogni email bounce+*
+cat > "${APP_DIR}/bounce-handler.sh" << 'BOUNCE_SCRIPT'
+#!/bin/bash
+# Chiamato da Postfix pipe transport per gli indirizzi bounce+<trackingId>@<domain>
+RECIPIENT="${1}"
+TRACKING_ID=$(echo "$RECIPIENT" | grep -oP 'bounce\+\K[^@]+')
+[[ -z "$TRACKING_ID" ]] && exit 0
+
+# Leggi email da stdin per rilevare tipo bounce
+EMAIL=$(cat)
+BOUNCE_TYPE="hard"
+BOUNCE_MESSAGE=""
+
+if echo "$EMAIL" | grep -qiP 'Status:\s+4\.'; then
+  BOUNCE_TYPE="soft"
+fi
+BOUNCE_MESSAGE=$(echo "$EMAIL" | grep -iP 'Diagnostic-Code:' | head -1 | sed 's/[Dd]iagnostic-[Cc]ode:\s*//' | cut -c1-200)
+
+ENV_FILE="$(dirname "$0")/backend/.env"
+BOUNCE_SECRET=$(grep '^BOUNCE_SECRET=' "$ENV_FILE" 2>/dev/null | cut -d= -f2- | tr -d '"')
+[[ -z "$BOUNCE_SECRET" ]] && exit 0
+
+BODY=$(printf '{"tracking_id":"%s","bounce_type":"%s","bounce_message":"%s"}' \
+  "$TRACKING_ID" "$BOUNCE_TYPE" "$(echo "$BOUNCE_MESSAGE" | sed 's/"/\\"/g')")
+
+curl -s -X POST http://localhost:3000/t/bounce \
+  -H "Content-Type: application/json" \
+  -H "X-Bounce-Secret: $BOUNCE_SECRET" \
+  -d "$BODY" --max-time 10 || true
+
+exit 0
+BOUNCE_SCRIPT
+
+chmod 750 "${APP_DIR}/bounce-handler.sh"
+chown "${APP_USER}:${APP_USER}" "${APP_DIR}/bounce-handler.sh"
+
+# Transport map: regex per routing bounce+* → pipe
+cat > /etc/postfix/transport_bounce << EOF
+/^bounce\+[^@]+@/  smtpflow-bounce:
+EOF
+postmap -r /etc/postfix/transport_bounce 2>/dev/null || true
+
+# Aggiungi pipe service in master.cf (se non esiste già)
+grep -q "^smtpflow-bounce" /etc/postfix/master.cf || cat >> /etc/postfix/master.cf << MASTER
+
+smtpflow-bounce unix  -       n       n       -       -       pipe
+  flags=Rq user=${APP_USER} argv=${APP_DIR}/bounce-handler.sh \${recipient}
+MASTER
+
+postconf -e "transport_maps = regexp:/etc/postfix/transport_bounce"
+systemctl restart postfix
+success "Bounce handling configurato"
+
 # ── Configure OpenDKIM (chiave unica server-wide, approccio CNAME) ───────────
 step "Configurazione OpenDKIM"
 
@@ -321,7 +385,7 @@ echo "smtpflow._domainkey.${DOMAIN} ${DOMAIN}:smtpflow:${DKIM_KEY_DIR}/smtpflow.
 # SigningTable: firma TUTTI i domini con la chiave del server (wildcard)
 echo "* smtpflow._domainkey.${DOMAIN}" > /etc/opendkim/SigningTable
 
-# Collega Postfix a OpenDKIM
+# Collega Postfix a OpenDKIM (sarà aggiornato dopo con Rspamd)
 postconf -e "milter_protocol = 6"
 postconf -e "milter_default_action = accept"
 postconf -e "smtpd_milters = inet:localhost:12301"
@@ -331,6 +395,48 @@ systemctl enable opendkim --quiet 2>/dev/null || true
 systemctl restart opendkim 2>/dev/null || true
 systemctl restart postfix
 success "OpenDKIM configurato (chiave server-wide)"
+
+# ── Configure Rspamd ──────────────────────────────────────────
+step "Configurazione Rspamd (filtro anti-spam outgoing)"
+
+# Modalità proxy milter
+mkdir -p /etc/rspamd/local.d
+
+cat > /etc/rspamd/local.d/worker-proxy.inc << 'EOF'
+milter = yes;
+timeout = 120s;
+bind_socket = "localhost:11332";
+upstream "local" {
+  default = yes;
+  self_scan = yes;
+}
+EOF
+
+# Soglie di azione (conservative per un relay SaaS legittimo)
+cat > /etc/rspamd/local.d/actions.conf << 'EOF'
+reject = 20;
+add_header = 8;
+greylist = 15;
+EOF
+
+# Reti fidate (loopback — la mail arriva da Node.js su 127.0.0.1)
+cat > /etc/rspamd/local.d/options.inc << 'EOF'
+local_networks = ["127.0.0.0/8", "::1"];
+EOF
+
+# Logging
+cat > /etc/rspamd/local.d/logging.inc << 'EOF'
+level = "error";
+EOF
+
+systemctl enable rspamd --quiet 2>/dev/null || true
+systemctl restart rspamd 2>/dev/null || true
+
+# Aggiorna Postfix: OpenDKIM (firma DKIM) + Rspamd (filtro spam)
+postconf -e "smtpd_milters = inet:localhost:12301,inet:localhost:11332"
+postconf -e "non_smtpd_milters = inet:localhost:12301,inet:localhost:11332"
+systemctl restart postfix
+success "Rspamd configurato e collegato a Postfix"
 
 # ── Configure Nginx ───────────────────────────────────────────
 step "Configurazione Nginx"
@@ -527,6 +633,8 @@ echo -e "  pm2 status             → Stato applicazione"
 echo -e "  pm2 logs smtpflow      → Log in tempo reale"
 echo -e "  pm2 restart smtpflow   → Riavvio"
 echo -e "  tail -f /var/log/smtpflow/error.log"
+echo -e "  systemctl status rspamd  → Stato filtro anti-spam"
+echo -e "  rspamc stat              → Statistiche Rspamd"
 echo ""
 echo -e "${YELLOW}⚠  Salva le credenziali qui sopra in un posto sicuro!${NC}"
 echo ""
