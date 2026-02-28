@@ -201,9 +201,11 @@ SMTP_PORT_SSL=465
 SMTP_HOSTNAME=${DOMAIN}
 
 # Relay → Postfix locale (consegna diretta)
+# Node.js ascolta porta 587/465 per i client SMTP
+# e passa la posta a Postfix sulla porta 25 (locale, loopback only)
 RELAY_PROVIDER=postfix
 RELAY_HOST=127.0.0.1
-RELAY_PORT=587
+RELAY_PORT=25
 RELAY_SECURE=false
 
 # DKIM multi-dominio
