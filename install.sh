@@ -120,19 +120,29 @@ success "Node.js $(node -v) installato"
 # ── PostgreSQL setup ──────────────────────────────────────────
 step "Configurazione PostgreSQL"
 
-# Rileva il nome del servizio PostgreSQL (varia per versione/distro)
-PG_SERVICE=""
-if systemctl list-unit-files | grep -q "^postgresql\.service"; then
-  PG_SERVICE="postgresql"
-elif systemctl list-unit-files | grep -qE "^postgresql@[0-9]+-main\.service"; then
-  PG_SERVICE=$(systemctl list-unit-files | grep -oE "postgresql@[0-9]+-main" | head -1)
+# Rileva versione PostgreSQL installata dal binario
+PG_VERSION=$(pg_config --version 2>/dev/null | grep -oE '[0-9]+' | head -1)
+[[ -z "$PG_VERSION" ]] && error "PostgreSQL non installato correttamente (pg_config non trovato)"
+info "PostgreSQL versione $PG_VERSION rilevata"
+
+# Assicura che esista un cluster (su alcuni VPS non viene creato automaticamente)
+if ! pg_lsclusters 2>/dev/null | grep -q "^$PG_VERSION "; then
+  info "Nessun cluster PostgreSQL trovato, creo 'main'..."
+  pg_createcluster "$PG_VERSION" main || error "Impossibile creare il cluster PostgreSQL $PG_VERSION"
 fi
 
-[[ -z "$PG_SERVICE" ]] && error "PostgreSQL non trovato. Verifica che 'postgresql postgresql-contrib' siano installati."
+# Prova prima il service versioned (postgresql@16-main), poi il generico
+PG_SERVICE="postgresql@${PG_VERSION}-main"
+if ! systemctl cat "$PG_SERVICE" &>/dev/null; then
+  PG_SERVICE="postgresql"
+fi
+if ! systemctl cat "$PG_SERVICE" &>/dev/null; then
+  error "Servizio PostgreSQL non trovato ($PG_SERVICE). Controlla l'installazione."
+fi
 
 systemctl enable "$PG_SERVICE" --quiet
 systemctl start "$PG_SERVICE"
-systemctl is-active --quiet "$PG_SERVICE" || error "PostgreSQL non si è avviato correttamente"
+systemctl is-active --quiet "$PG_SERVICE" || error "PostgreSQL non si è avviato (service: $PG_SERVICE)"
 
 sudo -u postgres psql -c "SELECT 1 FROM pg_roles WHERE rolname='smtpflow'" | grep -q 1 || \
   sudo -u postgres psql -c "CREATE USER smtpflow WITH PASSWORD '${DB_PASS}';"
