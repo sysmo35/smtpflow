@@ -1,0 +1,108 @@
+# ============================================================
+#  SMTPFlow — Docker Compose per produzione VPS
+#
+#  Setup:
+#    cp env.production.example .env.production
+#    nano .env.production          # compila le variabili
+#    docker compose -f docker-compose.production.yml --env-file .env.production up -d --build
+#
+#  Aggiornamento:
+#    docker compose -f docker-compose.production.yml --env-file .env.production up -d --build app
+# ============================================================
+
+services:
+
+  # ── PostgreSQL ──────────────────────────────────────────────
+  db:
+    image: postgres:16-alpine
+    restart: always
+    environment:
+      POSTGRES_DB: smtpflow
+      POSTGRES_USER: smtpflow
+      POSTGRES_PASSWORD: ${DB_PASS}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    # DB non esposta all'esterno in produzione
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U smtpflow"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - smtpflow
+
+  # ── Redis ───────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    restart: always
+    command: redis-server --save 60 1 --loglevel warning
+    volumes:
+      - redis_data:/data
+    # Redis non esposto all'esterno in produzione
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks:
+      - smtpflow
+
+  # ── Postfix + OpenDKIM ───────────────────────────────────────
+  postfix:
+    build:
+      context: ./docker/postfix
+      dockerfile: Dockerfile
+    restart: always
+    environment:
+      SMTP_HOSTNAME: ${SMTP_HOSTNAME}
+      DKIM_KEYS_DIR: /dkim-keys
+    volumes:
+      - dkim_keys:/dkim-keys
+    ports:
+      - "25:25"      # SMTP outbound verso internet (richiede IP con porta 25 libera)
+    networks:
+      - smtpflow
+
+  # ── SMTPFlow app ─────────────────────────────────────────────
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: always
+    env_file:
+      - .env.production
+    volumes:
+      - dkim_keys:/dkim-keys
+    ports:
+      - "80:3000"      # Web UI + API (metti Nginx davanti per HTTPS)
+      - "587:587"      # SMTP STARTTLS per i client
+      - "465:465"      # SMTP SSL per i client
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      postfix:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "5"
+    networks:
+      - smtpflow
+
+volumes:
+  postgres_data:
+  redis_data:
+  dkim_keys:
+
+networks:
+  smtpflow:
+    driver: bridge

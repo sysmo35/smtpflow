@@ -1,0 +1,12 @@
+node_modules/
+frontend/dist/
+*.log
+*.tar.gz
+.env
+.env.local
+.env.production
+dkim-keys/
+ssl/
+keys/
+/opt/
+.DS_Store

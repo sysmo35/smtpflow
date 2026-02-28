@@ -1,0 +1,91 @@
+services:
+
+  # ── PostgreSQL ──────────────────────────────────────────────
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: smtpflow
+      POSTGRES_USER: smtpflow
+      POSTGRES_PASSWORD: ${DB_PASS:-smtpflow_dev_pass}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U smtpflow"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - smtpflow
+
+  # ── Redis ───────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - smtpflow
+
+  # ── Postfix + OpenDKIM ───────────────────────────────────────
+  # MTA per consegna diretta — nessun relay esterno
+  postfix:
+    build:
+      context: ./docker/postfix
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      SMTP_HOSTNAME: ${SMTP_HOSTNAME:-localhost}
+      DKIM_KEYS_DIR: /dkim-keys
+    volumes:
+      - dkim_keys:/dkim-keys        # Volume condiviso con il container app
+    ports:
+      - "25:25"                     # SMTP outbound (richiede VPS/IP dedicato)
+    networks:
+      - smtpflow
+
+  # ── SMTPFlow app ────────────────────────────────────────────
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - .env.docker
+    volumes:
+      - dkim_keys:/dkim-keys        # Scrive chiavi DKIM → Postfix le legge
+    ports:
+      - "3001:3000"     # Web UI + API  →  http://localhost:3001
+      - "2587:587"      # SMTP STARTTLS  (host 2587 → container 587)
+      - "2465:465"      # SMTP SSL       (host 2465 → container 465)
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      postfix:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - smtpflow
+
+volumes:
+  postgres_data:
+  redis_data:
+  dkim_keys:          # Volume condiviso app ↔ postfix per le chiavi DKIM
+
+networks:
+  smtpflow:
+    driver: bridge
