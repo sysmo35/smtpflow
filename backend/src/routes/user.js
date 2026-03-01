@@ -3,7 +3,7 @@ const crypto = require('crypto');
 const db = require('../database');
 const { authenticate } = require('../middleware/auth');
 const config = require('../config');
-const { registerDomainDkim, removeDomainDkim } = require('../services/dkimManager');
+const { removeDomainDkim } = require('../services/dkimManager');
 
 const router = express.Router();
 router.use(authenticate);
@@ -185,21 +185,11 @@ router.post('/domains', async (req, res) => {
   try {
     const verificationToken = crypto.randomBytes(16).toString('hex');
 
-    const { privateKey, publicKey } = crypto.generateKeyPairSync('rsa', {
-      modulusLength: 2048,
-      publicKeyEncoding: { type: 'spki', format: 'pem' },
-      privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
-    });
-    const publicKeyBase64 = publicKey
-      .replace(/-----BEGIN PUBLIC KEY-----/, '')
-      .replace(/-----END PUBLIC KEY-----/, '')
-      .replace(/\s+/g, '');
-
     const [{ rows }, spfRecord] = await Promise.all([
       db.query(
-        `INSERT INTO domains (user_id, domain, dkim_selector, dkim_public_key, dkim_private_key, verification_token)
-         VALUES ($1,$2,$3,$4,$5,$6) RETURNING id, domain, status, dkim_selector, dkim_public_key, verification_token, created_at`,
-        [req.user.id, domain.toLowerCase(), 'smtpflow', publicKeyBase64, privateKey, verificationToken]
+        `INSERT INTO domains (user_id, domain, dkim_selector, verification_token)
+         VALUES ($1,$2,$3,$4) RETURNING id, domain, status, dkim_selector, verification_token, created_at`,
+        [req.user.id, domain.toLowerCase(), 'smtpflow', verificationToken]
       ),
       getSpfRecord(),
     ]);
@@ -256,11 +246,6 @@ router.post('/domains/:id/verify', async (req, res) => {
     getSpfRecord(),
   ]);
 
-  // Registra la chiave DKIM privata in Postfix/OpenDKIM quando il dominio è verificato
-  if (newStatus === 'verified' && domain.dkim_private_key) {
-    await registerDomainDkim(domain.domain, domain.dkim_private_key);
-  }
-
   res.json({ ...updated[0], dns_records: getDnsRecords(domain.domain, updated[0], spfRecord) });
 });
 
@@ -301,9 +286,9 @@ function getDnsRecords(domain, domainRow, spfRecord) {
     {
       type: 'TXT',
       host: 'smtpflow._domainkey',
-      value: domainRow.dkim_public_key
-        ? `v=DKIM1; k=rsa; p=${domainRow.dkim_public_key}`
-        : 'Chiave non ancora generata',
+      value: config.dkim.publicKey
+        ? `v=DKIM1; h=sha256; k=rsa; p=${config.dkim.publicKey}`
+        : `smtpflow._domainkey.${hostname}`,
       description: 'DKIM — firma digitale',
       required: false,
     },

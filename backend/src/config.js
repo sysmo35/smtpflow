@@ -53,4 +53,7 @@ module.exports = {
     email: process.env.ADMIN_EMAIL || 'admin@localhost',
     password: process.env.ADMIN_PASS || 'changeme',
   },
+  dkim: {
+    publicKey: process.env.DKIM_PUBLIC_KEY || '',
+  },
 };
