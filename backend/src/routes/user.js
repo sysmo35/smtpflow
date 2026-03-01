@@ -3,7 +3,7 @@ const crypto = require('crypto');
 const db = require('../database');
 const { authenticate } = require('../middleware/auth');
 const config = require('../config');
-const { removeDomainDkim } = require('../services/dkimManager');
+const { registerDomainDkim, removeDomainDkim } = require('../services/dkimManager');
 
 const router = express.Router();
 router.use(authenticate);
@@ -185,11 +185,21 @@ router.post('/domains', async (req, res) => {
   try {
     const verificationToken = crypto.randomBytes(16).toString('hex');
 
+    const { privateKey, publicKey } = crypto.generateKeyPairSync('rsa', {
+      modulusLength: 2048,
+      publicKeyEncoding: { type: 'spki', format: 'pem' },
+      privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
+    });
+    const publicKeyBase64 = publicKey
+      .replace(/-----BEGIN PUBLIC KEY-----/, '')
+      .replace(/-----END PUBLIC KEY-----/, '')
+      .replace(/\s+/g, '');
+
     const [{ rows }, spfRecord] = await Promise.all([
       db.query(
-        `INSERT INTO domains (user_id, domain, dkim_selector, verification_token)
-         VALUES ($1,$2,$3,$4) RETURNING id, domain, status, dkim_selector, verification_token, created_at`,
-        [req.user.id, domain.toLowerCase(), 'smtpflow', verificationToken]
+        `INSERT INTO domains (user_id, domain, dkim_selector, dkim_public_key, dkim_private_key, verification_token)
+         VALUES ($1,$2,$3,$4,$5,$6) RETURNING id, domain, status, dkim_selector, dkim_public_key, verification_token, created_at`,
+        [req.user.id, domain.toLowerCase(), 'smtpflow', publicKeyBase64, privateKey, verificationToken]
       ),
       getSpfRecord(),
     ]);
@@ -226,16 +236,10 @@ router.post('/domains/:id/verify', async (req, res) => {
     const mxRecords = await dns.resolveMx(domain.domain).catch(() => []);
     mxVerified = mxRecords.length > 0;
 
-    // Check DKIM — il cliente deve aggiungere un CNAME verso smtpflow._domainkey.<hostname>
-    // oppure un TXT con v=DKIM1 (entrambi accettati)
+    // Check DKIM — il cliente deve aggiungere un record TXT con v=DKIM1
     try {
-      const cnameRecords = await dns.resolveCname(`smtpflow._domainkey.${domain.domain}`).catch(() => null);
-      if (cnameRecords && cnameRecords.some(r => r.includes(`smtpflow._domainkey.${config.smtp.hostname}`))) {
-        dkimVerified = true;
-      } else {
-        const dkimTxt = await dns.resolveTxt(`smtpflow._domainkey.${domain.domain}`).catch(() => []);
-        dkimVerified = dkimTxt.some(r => r.join('').includes('v=DKIM1'));
-      }
+      const dkimTxt = await dns.resolveTxt(`smtpflow._domainkey.${domain.domain}`).catch(() => []);
+      dkimVerified = dkimTxt.some(r => r.join('').includes('v=DKIM1'));
     } catch (e) {
       dkimVerified = false;
     }
@@ -251,6 +255,11 @@ router.post('/domains/:id/verify', async (req, res) => {
     ),
     getSpfRecord(),
   ]);
+
+  // Registra la chiave DKIM privata in Postfix/OpenDKIM quando il dominio è verificato
+  if (newStatus === 'verified' && domain.dkim_private_key) {
+    await registerDomainDkim(domain.domain, domain.dkim_private_key);
+  }
 
   res.json({ ...updated[0], dns_records: getDnsRecords(domain.domain, updated[0], spfRecord) });
 });
@@ -290,10 +299,12 @@ function getDnsRecords(domain, domainRow, spfRecord) {
       required: true,
     },
     {
-      type: 'CNAME',
+      type: 'TXT',
       host: 'smtpflow._domainkey',
-      value: `smtpflow._domainkey.${hostname}`,
-      description: 'DKIM — firma digitale (punta alla chiave del server)',
+      value: domainRow.dkim_public_key
+        ? `v=DKIM1; k=rsa; p=${domainRow.dkim_public_key}`
+        : 'Chiave non ancora generata',
+      description: 'DKIM — firma digitale',
       required: false,
     },
     {

@@ -233,7 +233,7 @@ export default function Domains() {
                     <AlertCircle size={14} className="text-brand-500 dark:text-brand-400 shrink-0 mt-0.5" />
                     <div className="text-xs text-slate-600 dark:text-slate-400 space-y-1">
                       <p><span className="text-slate-800 dark:text-slate-200 font-medium">Solo 1 record obbligatorio:</span> aggiungi il record SPF nel pannello DNS del tuo provider.</p>
-                      <p>Il record CNAME (DKIM) e DMARC sono opzionali ma migliorano la consegna nelle caselle Gmail/Outlook.</p>
+                      <p>Il record TXT DKIM e DMARC sono opzionali ma migliorano la consegna nelle caselle Gmail/Outlook.</p>
                     </div>
                   </div>
                   <div className="space-y-3">
