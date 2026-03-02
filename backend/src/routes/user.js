@@ -124,7 +124,7 @@ router.get('/emails', async (req, res) => {
   try {
     const { rows } = await db.query(`
       SELECT id, from_address, from_name, to_addresses, subject, status,
-             opened, opened_at, opened_count, bounced, bounced_at, bounce_type,
+             opened, opened_at, opened_count, bounced, bounced_at, bounce_type, bounce_message,
              spam_reported, clicked, click_count, created_at
       FROM emails WHERE ${conditions.join(' AND ')}
       ORDER BY created_at DESC LIMIT $${params.length - 1} OFFSET $${params.length}

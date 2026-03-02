@@ -157,10 +157,20 @@ export default function History() {
                     <p className="text-slate-700 dark:text-slate-300 mt-0.5 break-all">{selected.to_addresses}</p>
                   </div>
                   {selected.bounced && (
-                    <div>
-                      <span className="text-slate-500">Motivo bounce:</span>
-                      <p className="text-red-500 dark:text-red-400 mt-0.5">{selected.bounce_message || selected.bounce_type || 'N/A'}</p>
-                    </div>
+                    <>
+                      <div>
+                        <span className="text-slate-500">Tipo bounce:</span>
+                        <p className={`mt-0.5 font-semibold uppercase text-xs ${selected.bounce_type === 'soft' ? 'text-orange-500 dark:text-orange-400' : 'text-red-500 dark:text-red-400'}`}>
+                          {selected.bounce_type || 'hard'}
+                        </p>
+                      </div>
+                      <div className="col-span-2">
+                        <span className="text-slate-500">Risposta server:</span>
+                        <p className="text-red-500 dark:text-red-400 mt-0.5 font-mono text-xs break-all leading-relaxed">
+                          {selected.bounce_message || 'Nessuna risposta disponibile'}
+                        </p>
+                      </div>
+                    </>
                   )}
                   {selected.opened_at && (
                     <div>

@@ -90,6 +90,61 @@ postconf -e "milter_default_action = accept"
 postconf -e "smtpd_milters = inet:localhost:12301"
 postconf -e "non_smtpd_milters = inet:localhost:12301"
 
+# ── Bounce processing ─────────────────────────────────────────
+# Accept bounce+<trackingId>@$SMTP_HOSTNAME as a virtual mailbox
+# and pipe it to the process_bounce script
+postconf -e "virtual_mailbox_domains = \$myhostname"
+postconf -e "virtual_mailbox_maps = regexp:/etc/postfix/bounce_regex"
+postconf -e "virtual_transport = bounce_notify"
+
+# Only accept addresses matching bounce+<hex>@
+cat > /etc/postfix/bounce_regex << 'EOF'
+/^bounce\+[0-9a-f]+@/    bounce
+EOF
+
+# Add bounce_notify pipe service to master.cf (only once)
+grep -q "^bounce_notify" /etc/postfix/master.cf || cat >> /etc/postfix/master.cf << 'MASTER'
+bounce_notify unix  -       n       n       -       1       pipe
+  flags=FR user=nobody argv=/usr/local/bin/process_bounce ${recipient}
+MASTER
+
+# Generate the bounce processor script with credentials baked in
+cat > /usr/local/bin/process_bounce << 'ENDSCRIPT'
+#!/bin/bash
+RECIPIENT="$1"
+TRACKING_ID=$(echo "$RECIPIENT" | sed 's/bounce+\([^@]*\)@.*/\1/')
+[ -z "$TRACKING_ID" ] && exit 0
+
+EMAIL=$(cat)
+
+# Extract status code and diagnostic message from DSN
+STATUS=$(echo "$EMAIL" | grep -m1 "^Status:" | cut -d: -f2 | tr -d ' \r\n')
+DIAGNOSTIC=$(echo "$EMAIL" | grep -m1 "^Diagnostic-Code:" | cut -d: -f2- | sed 's/^ *smtp; *//' | tr -d '\r' | xargs | cut -c1-500)
+
+# 4.x.x = temporary/soft, 5.x.x = permanent/hard
+BOUNCE_TYPE="hard"
+echo "$STATUS" | grep -qE "^4\." && BOUNCE_TYPE="soft"
+
+# Fallback: look for SMTP error line in body
+[ -z "$DIAGNOSTIC" ] && DIAGNOSTIC=$(echo "$EMAIL" | grep -oE "(5[0-9]{2}|4[0-9]{2}) [^\r\n]+" | head -1 | cut -c1-300)
+
+BOUNCE_MSG="${DIAGNOSTIC:-Unknown bounce reason}"
+BOUNCE_MSG=$(printf '%s' "$BOUNCE_MSG" | sed 's/\\/\\\\/g; s/"/\\"/g')
+
+curl -s -X POST "__BACKEND_URL__/t/bounce" \
+  -H "Content-Type: application/json" \
+  -H "X-Bounce-Secret: __BOUNCE_SECRET__" \
+  -d "{\"tracking_id\":\"${TRACKING_ID}\",\"bounce_type\":\"${BOUNCE_TYPE}\",\"bounce_message\":\"${BOUNCE_MSG}\"}" \
+  >/dev/null 2>&1
+exit 0
+ENDSCRIPT
+
+# Substitute runtime values into the script
+sed -i "s|__BACKEND_URL__|${BACKEND_URL:-http://app:3000}|g" /usr/local/bin/process_bounce
+sed -i "s|__BOUNCE_SECRET__|${BOUNCE_SECRET:-}|g" /usr/local/bin/process_bounce
+chmod +x /usr/local/bin/process_bounce
+echo "[bounce] Processor configured for ${BACKEND_URL:-http://app:3000}"
+
 # ── Abilita porta 587 (submission) per Node.js → Postfix ────
 # La porta 25 rimane per la consegna Postfix → internet (server destinatari)
 grep -q "^submission" /etc/postfix/master.cf || cat >> /etc/postfix/master.cf << 'MASTER'

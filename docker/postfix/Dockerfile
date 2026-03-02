@@ -9,6 +9,7 @@ RUN apt-get update && apt-get install -y \
     inotify-tools \
     rsyslog \
     dnsutils \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 # Directories
