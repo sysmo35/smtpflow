@@ -17,6 +17,7 @@ const userRoutes = require('./routes/user');
 const sendRoutes = require('./routes/send');
 const trackingRoutes = require('./routes/tracking');
 const brandingRoutes = require('./routes/branding');
+const provisionRoutes = require('./routes/provision');
 
 const app = express();
 
@@ -53,6 +54,7 @@ app.use('/api/auth', authRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/user', userRoutes);
 app.use('/api/send', sendRoutes);
+app.use('/api/provision', provisionRoutes);
 app.use('/api', brandingRoutes);   // GET /api/branding (pub) + GET|PUT /api/admin/branding
 app.use('/t', trackingRoutes);
 
