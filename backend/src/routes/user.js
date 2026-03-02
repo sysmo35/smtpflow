@@ -1,9 +1,10 @@
 const express = require('express');
 const crypto = require('crypto');
+const bcrypt = require('bcryptjs');
 const db = require('../database');
 const { authenticate } = require('../middleware/auth');
 const config = require('../config');
-const { removeDomainDkim } = require('../services/dkimManager');
+const { removeDomainDkim, generateDkimKeyPair, registerDomainDkim } = require('../services/dkimManager');
 
 const router = express.Router();
 router.use(authenticate);
@@ -82,7 +83,7 @@ router.get('/credentials', async (req, res) => {
       smtp_port: config.smtp.port,
       smtp_port_ssl: config.smtp.portSSL,
       smtp_username: userRes.rows[0].smtp_username,
-      smtp_password: userRes.rows[0].smtp_password,
+      smtp_password: null,
       smtp_encryption: 'STARTTLS/SSL',
       spf_record: spfRecord,
     });
@@ -94,16 +95,17 @@ router.get('/credentials', async (req, res) => {
 // POST /api/user/credentials/reset
 router.post('/credentials/reset', async (req, res) => {
   const newPass = crypto.randomBytes(16).toString('base64url');
+  const newPassHash = await bcrypt.hash(newPass, 10);
   try {
     const { rows } = await db.query(
-      'UPDATE users SET smtp_password=$1, updated_at=NOW() WHERE id=$2 RETURNING smtp_username, smtp_password',
-      [newPass, req.user.id]
+      'UPDATE users SET smtp_password=$1, updated_at=NOW() WHERE id=$2 RETURNING smtp_username',
+      [newPassHash, req.user.id]
     );
     res.json({
       smtp_host: config.smtp.hostname,
       smtp_port: config.smtp.port,
       smtp_username: rows[0].smtp_username,
-      smtp_password: rows[0].smtp_password,
+      smtp_password: newPass,
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -184,15 +186,19 @@ router.post('/domains', async (req, res) => {
 
   try {
     const verificationToken = crypto.randomBytes(16).toString('hex');
+    const { privateKeyPem, dkimPublicKey } = generateDkimKeyPair();
 
     const [{ rows }, spfRecord] = await Promise.all([
       db.query(
-        `INSERT INTO domains (user_id, domain, dkim_selector, verification_token)
-         VALUES ($1,$2,$3,$4) RETURNING id, domain, status, dkim_selector, verification_token, created_at`,
-        [req.user.id, domain.toLowerCase(), 'smtpflow', verificationToken]
+        `INSERT INTO domains (user_id, domain, dkim_selector, dkim_public_key, verification_token)
+         VALUES ($1,$2,$3,$4,$5) RETURNING id, domain, status, dkim_selector, dkim_public_key, verification_token, created_at`,
+        [req.user.id, domain.toLowerCase(), 'smtpflow', dkimPublicKey, verificationToken]
       ),
       getSpfRecord(),
     ]);
+
+    // Register private key with DKIM manager (non-blocking)
+    registerDomainDkim(domain.toLowerCase(), privateKeyPem).catch(() => {});
 
     res.status(201).json({
       ...rows[0],
@@ -286,9 +292,11 @@ function getDnsRecords(domain, domainRow, spfRecord) {
     {
       type: 'TXT',
       host: 'smtpflow._domainkey',
-      value: config.dkim.publicKey
-        ? `v=DKIM1; h=sha256; k=rsa; p=${config.dkim.publicKey}`
-        : `smtpflow._domainkey.${hostname}`,
+      value: domainRow?.dkim_public_key
+        ? `v=DKIM1; h=sha256; k=rsa; p=${domainRow.dkim_public_key}`
+        : config.dkim?.publicKey
+          ? `v=DKIM1; h=sha256; k=rsa; p=${config.dkim.publicKey}`
+          : `smtpflow._domainkey.${hostname}`,
       description: 'DKIM — firma digitale',
       required: false,
     },

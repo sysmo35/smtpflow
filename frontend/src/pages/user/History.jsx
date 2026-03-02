@@ -1,10 +1,11 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { getEmails } from '../../api';
-import { Mail, Search, Eye, RefreshCw, ChevronLeft, ChevronRight, AlertCircle, ShieldAlert } from 'lucide-react';
+import { Mail, Search, Eye, RefreshCw, ChevronLeft, ChevronRight, AlertCircle, ShieldAlert, CheckCircle2 } from 'lucide-react';
 import toast from 'react-hot-toast';
 
 const STATUS_FILTERS = [
   { value: '', label: 'Tutti' },
+  { value: 'delivered', label: 'Consegnata' },
   { value: 'sent', label: 'Inviati' },
   { value: 'bounced', label: 'Bounce' },
   { value: 'spam', label: 'Spam' },
@@ -14,6 +15,7 @@ function StatusBadge({ email }) {
   if (email.spam_reported) return <span className="badge badge-spam"><ShieldAlert size={10} />Spam</span>;
   if (email.bounced) return <span className="badge badge-bounced"><AlertCircle size={10} />Bounce</span>;
   if (email.opened) return <span className="badge badge-opened"><Eye size={10} />Aperta</span>;
+  if (email.status === 'delivered') return <span className="badge badge-delivered"><CheckCircle2 size={10} />Consegnata</span>;
   return <span className="badge badge-sent"><Mail size={10} />Inviata</span>;
 }
 

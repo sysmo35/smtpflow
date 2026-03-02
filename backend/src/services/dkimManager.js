@@ -11,6 +11,7 @@
 const fs = require('fs');
 const path = require('path');
 const { execSync } = require('child_process');
+const { generateKeyPairSync } = require('node:crypto');
 const logger = require('../logger');
 
 const DKIM_KEYS_DIR = process.env.DKIM_KEYS_DIR || '/dkim-keys';
@@ -70,4 +71,21 @@ async function removeDomainDkim(domain) {
   }
 }
 
-module.exports = { registerDomainDkim, removeDomainDkim };
+/**
+ * Genera una coppia di chiavi RSA 2048 per DKIM.
+ * Ritorna { privateKeyPem, dkimPublicKey } dove dkimPublicKey è la stringa
+ * base64 da mettere nel record TXT DKIM (campo p=).
+ */
+function generateDkimKeyPair() {
+  const { privateKey, publicKey } = generateKeyPairSync('rsa', {
+    modulusLength: 2048,
+    publicKeyEncoding: { type: 'pkcs1', format: 'pem' },
+    privateKeyEncoding: { type: 'pkcs1', format: 'pem' },
+  });
+  // Estrae la chiave pubblica DER in base64 rimuovendo header/footer PEM e newline
+  const dkimPublicKey = publicKey
+    .replace(/-----BEGIN RSA PUBLIC KEY-----|-----END RSA PUBLIC KEY-----|\n/g, '');
+  return { privateKeyPem: privateKey, dkimPublicKey };
+}
+
+module.exports = { registerDomainDkim, removeDomainDkim, generateDkimKeyPair };

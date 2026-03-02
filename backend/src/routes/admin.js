@@ -8,6 +8,19 @@ const { authenticate, requireAdmin } = require('../middleware/auth');
 const router = express.Router();
 router.use(authenticate, requireAdmin);
 
+async function auditLog(adminUser, action, targetType, targetId, details, ip) {
+  try {
+    await db.query(
+      `INSERT INTO audit_logs (admin_id, admin_email, action, target_type, target_id, details, ip_address)
+       VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+      [adminUser.id, adminUser.email, action, targetType, targetId || null, JSON.stringify(details || {}), ip || null]
+    );
+  } catch (e) {
+    // Non-fatal: log but don't break the request
+    console.error('auditLog error:', e.message);
+  }
+}
+
 // GET /api/admin/stats
 router.get('/stats', async (req, res) => {
   try {
@@ -100,13 +113,15 @@ router.post('/users',
       const passwordHash = await bcrypt.hash(password, 12);
       const smtpUsername = 'smtp_' + crypto.randomBytes(6).toString('hex');
       const smtpPassword = crypto.randomBytes(16).toString('base64url');
+      const smtpPasswordHash = await bcrypt.hash(smtpPassword, 10);
 
       const { rows } = await db.query(
         `INSERT INTO users (email, name, password_hash, smtp_username, smtp_password, role, package_id)
          VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id, email, name, role, status, smtp_username, created_at`,
-        [email, name, passwordHash, smtpUsername, smtpPassword, role, package_id || null]
+        [email, name, passwordHash, smtpUsername, smtpPasswordHash, role, package_id || null]
       );
-      res.status(201).json(rows[0]);
+      await auditLog(req.user, 'user.created', 'user', rows[0].id, { email, role }, req.ip);
+      res.status(201).json({ ...rows[0], smtp_password: smtpPassword });
     } catch (err) {
       if (err.code === '23505') return res.status(409).json({ error: 'Email già registrata' });
       res.status(500).json({ error: err.message });
@@ -130,6 +145,7 @@ router.put('/users/:id', async (req, res) => {
       [name, status, package_id, role, id]
     );
     if (!rows[0]) return res.status(404).json({ error: 'Utente non trovato' });
+    await auditLog(req.user, 'user.updated', 'user', id, { changes: req.body }, req.ip);
     res.json(rows[0]);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -141,7 +157,9 @@ router.delete('/users/:id', async (req, res) => {
   const { id } = req.params;
   if (id === req.user.id) return res.status(400).json({ error: 'Non puoi eliminare te stesso' });
   try {
+    const { rows: target } = await db.query('SELECT email FROM users WHERE id=$1', [id]);
     await db.query('DELETE FROM users WHERE id = $1', [id]);
+    await auditLog(req.user, 'user.deleted', 'user', id, { email: target[0]?.email }, req.ip);
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -152,13 +170,15 @@ router.delete('/users/:id', async (req, res) => {
 router.post('/users/:id/reset-smtp', async (req, res) => {
   const { id } = req.params;
   const newPass = crypto.randomBytes(16).toString('base64url');
+  const newPassHash = await bcrypt.hash(newPass, 10);
   try {
     const { rows } = await db.query(
-      'UPDATE users SET smtp_password = $1, updated_at = NOW() WHERE id = $2 RETURNING smtp_username, smtp_password',
-      [newPass, id]
+      'UPDATE users SET smtp_password = $1, updated_at = NOW() WHERE id = $2 RETURNING smtp_username',
+      [newPassHash, id]
     );
     if (!rows[0]) return res.status(404).json({ error: 'Utente non trovato' });
-    res.json(rows[0]);
+    await auditLog(req.user, 'smtp_password.reset', 'user', id, {}, req.ip);
+    res.json({ smtp_username: rows[0].smtp_username, smtp_password: newPass });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -177,6 +197,7 @@ router.post('/users/:id/reset-password',
         [passwordHash, id]
       );
       if (!rows[0]) return res.status(404).json({ error: 'Utente non trovato' });
+      await auditLog(req.user, 'web_password.reset', 'user', id, {}, req.ip);
       res.json({ ...rows[0], newPassword });
     } catch (err) {
       res.status(500).json({ error: err.message });
@@ -285,7 +306,26 @@ router.post('/users/:id/impersonate', async (req, res) => {
       config.jwt.secret,
       { expiresIn: '4h' }
     );
+    await auditLog(req.user, 'user.impersonated', 'user', id, { target_email: rows[0].email }, req.ip);
     res.json({ token, user: rows[0], impersonatedBy: { id: req.user.id, email: req.user.email } });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/admin/audit
+router.get('/audit', async (req, res) => {
+  const { page = 1, limit = 50 } = req.query;
+  const offset = (page - 1) * limit;
+  try {
+    const [{ rows }, count] = await Promise.all([
+      db.query(
+        'SELECT * FROM audit_logs ORDER BY created_at DESC LIMIT $1 OFFSET $2',
+        [limit, offset]
+      ),
+      db.query('SELECT COUNT(*) FROM audit_logs'),
+    ]);
+    res.json({ logs: rows, total: parseInt(count.rows[0].count) });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

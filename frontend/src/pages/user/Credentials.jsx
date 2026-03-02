@@ -96,7 +96,19 @@ export default function Credentials() {
           <CopyField label="Host SMTP" value={creds?.smtp_host} icon={Globe} />
           <CopyField label="Porta STARTTLS" value={String(creds?.smtp_port)} icon={Zap} />
           <CopyField label="Username" value={creds?.smtp_username} icon={User} />
-          <CopyField label="Password" value={creds?.smtp_password} secret icon={Lock} />
+          {creds?.smtp_password
+            ? <CopyField label="Password" value={creds.smtp_password} secret icon={Lock} />
+            : (
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium text-slate-500 uppercase tracking-wider flex items-center gap-1.5">
+                  <Lock size={12} /> Password
+                </label>
+                <div className="flex items-center bg-slate-50 dark:bg-slate-900/60 border border-slate-200 dark:border-slate-700 rounded-xl px-4 py-2.5">
+                  <p className="text-xs text-slate-500">Password nascosta per sicurezza — clicca <strong>Reset</strong> per ottenerne una nuova visibile.</p>
+                </div>
+              </div>
+            )
+          }
         </div>
 
         <div className="bg-slate-50 dark:bg-slate-900/50 rounded-xl p-4 border border-slate-200 dark:border-slate-700/50">
@@ -185,22 +197,24 @@ export default function Credentials() {
         </div>
       )}
 
-      {/* Quick copy all */}
-      <div className="card">
-        <h3 className="font-semibold text-slate-800 dark:text-slate-200 mb-3">Configurazione rapida</h3>
-        <p className="text-xs text-slate-500 mb-3">Copia tutto il blocco per la configurazione del tuo client</p>
-        <button
-          onClick={() => {
-            const text = `Host: ${creds?.smtp_host}\nPorta: ${creds?.smtp_port}\nUsername: ${creds?.smtp_username}\nPassword: ${creds?.smtp_password}\nCifratura: STARTTLS`;
-            navigator.clipboard.writeText(text);
-            toast.success('Configurazione copiata!');
-          }}
-          className="btn-secondary flex items-center gap-2 text-sm"
-        >
-          <Copy size={14} />
-          Copia configurazione completa
-        </button>
-      </div>
+      {/* Quick copy all — only shown when password is visible (after reset) */}
+      {creds?.smtp_password && (
+        <div className="card">
+          <h3 className="font-semibold text-slate-800 dark:text-slate-200 mb-3">Configurazione rapida</h3>
+          <p className="text-xs text-slate-500 mb-3">Copia tutto il blocco per la configurazione del tuo client</p>
+          <button
+            onClick={() => {
+              const text = `Host: ${creds.smtp_host}\nPorta: ${creds.smtp_port}\nUsername: ${creds.smtp_username}\nPassword: ${creds.smtp_password}\nCifratura: STARTTLS`;
+              navigator.clipboard.writeText(text);
+              toast.success('Configurazione copiata!');
+            }}
+            className="btn-secondary flex items-center gap-2 text-sm"
+          >
+            <Copy size={14} />
+            Copia configurazione completa
+          </button>
+        </div>
+      )}
 
       {/* Danger zone */}
       <div className="card border-red-200 dark:border-red-800/30">

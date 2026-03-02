@@ -33,13 +33,22 @@ function injectTracking(html, trackingId) {
 
 async function checkAndIncrementUsage(userId, packageId) {
   const yearMonth = new Date().toISOString().slice(0, 7);
-  const [usage, pkg] = await Promise.all([
+  const [usage, pkg, dailyRes, hourlyRes] = await Promise.all([
     db.query('SELECT email_count FROM monthly_usage WHERE user_id=$1 AND year_month=$2', [userId, yearMonth]),
-    db.query('SELECT monthly_limit FROM packages WHERE id=$1', [packageId]),
+    db.query('SELECT monthly_limit, daily_limit, hourly_limit FROM packages WHERE id=$1', [packageId]),
+    db.query('SELECT COUNT(*) as count FROM emails WHERE user_id=$1 AND created_at >= CURRENT_DATE', [userId]),
+    db.query("SELECT COUNT(*) as count FROM emails WHERE user_id=$1 AND created_at >= NOW() - INTERVAL '1 hour'", [userId]),
   ]);
   const used = parseInt(usage.rows[0]?.email_count || 0);
   const limit = pkg.rows[0]?.monthly_limit || 1000;
+  const dailyCount = parseInt(dailyRes.rows[0].count);
+  const hourlyCount = parseInt(hourlyRes.rows[0].count);
+
   if (used >= limit) throw Object.assign(new Error(`Limite mensile raggiunto (${used}/${limit})`), { status: 429 });
+  if (pkg.rows[0]?.daily_limit && dailyCount >= pkg.rows[0].daily_limit)
+    throw Object.assign(new Error(`Limite giornaliero raggiunto (${dailyCount}/${pkg.rows[0].daily_limit})`), { status: 429 });
+  if (pkg.rows[0]?.hourly_limit && hourlyCount >= pkg.rows[0].hourly_limit)
+    throw Object.assign(new Error(`Limite orario raggiunto (${hourlyCount}/${pkg.rows[0].hourly_limit})`), { status: 429 });
 
   await db.query(
     `INSERT INTO monthly_usage (user_id, year_month, email_count) VALUES ($1,$2,1)
@@ -95,13 +104,13 @@ router.post('/',
 
       const { rows } = await db.query(
         `INSERT INTO emails (user_id, from_address, from_name, to_addresses, subject, status, tracking_id, size_bytes)
-         VALUES ($1,$2,$3,$4,$5,'sent',$6,$7) RETURNING id, tracking_id, created_at`,
+         VALUES ($1,$2,$3,$4,$5,'delivered',$6,$7) RETURNING id, tracking_id, created_at`,
         [user.id, fromAddress, from_name || '', toAddresses.join(', '), subject, trackingId,
          Buffer.byteLength(html || text || '', 'utf8')]
       );
 
       await db.query(
-        'INSERT INTO email_events (email_id, event_type) VALUES ($1, \'sent\')',
+        'INSERT INTO email_events (email_id, event_type) VALUES ($1, \'delivered\')',
         [rows[0].id]
       );
 

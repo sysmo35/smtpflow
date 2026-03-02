@@ -1,5 +1,6 @@
 const { SMTPServer } = require('smtp-server');
 const { simpleParser } = require('mailparser');
+const bcrypt = require('bcryptjs');
 const cheerio = require('cheerio');
 const { v4: uuidv4 } = require('uuid');
 const fs = require('fs');
@@ -41,7 +42,7 @@ async function getUserByCredentials(username, password) {
     'SELECT id, email, name, status, package_id, smtp_username, smtp_password FROM users WHERE smtp_username = $1',
     [username]
   );
-  if (!rows[0] || rows[0].smtp_password !== password) return null;
+  if (!rows[0] || !(await bcrypt.compare(password, rows[0].smtp_password))) return null;
   if (rows[0].status !== 'active') return null;
   return rows[0];
 }
@@ -49,16 +50,26 @@ async function getUserByCredentials(username, password) {
 async function checkRateLimit(userId, packageId) {
   const yearMonth = new Date().toISOString().slice(0, 7);
 
-  const [usage, pkg] = await Promise.all([
+  const [usage, pkg, dailyRes, hourlyRes] = await Promise.all([
     db.query('SELECT email_count FROM monthly_usage WHERE user_id=$1 AND year_month=$2', [userId, yearMonth]),
-    db.query('SELECT monthly_limit, daily_limit FROM packages WHERE id=$1', [packageId]),
+    db.query('SELECT monthly_limit, daily_limit, hourly_limit FROM packages WHERE id=$1', [packageId]),
+    db.query('SELECT COUNT(*) as count FROM emails WHERE user_id=$1 AND created_at >= CURRENT_DATE', [userId]),
+    db.query("SELECT COUNT(*) as count FROM emails WHERE user_id=$1 AND created_at >= NOW() - INTERVAL '1 hour'", [userId]),
   ]);
 
   const used = parseInt(usage.rows[0]?.email_count || 0);
   const limit = pkg.rows[0]?.monthly_limit || 1000;
+  const dailyCount = parseInt(dailyRes.rows[0].count);
+  const hourlyCount = parseInt(hourlyRes.rows[0].count);
 
   if (used >= limit) {
     return { allowed: false, reason: `Monthly limit reached (${used}/${limit})` };
+  }
+  if (pkg.rows[0]?.daily_limit && dailyCount >= pkg.rows[0].daily_limit) {
+    return { allowed: false, reason: `Daily limit reached (${dailyCount}/${pkg.rows[0].daily_limit})` };
+  }
+  if (pkg.rows[0]?.hourly_limit && hourlyCount >= pkg.rows[0].hourly_limit) {
+    return { allowed: false, reason: `Hourly limit reached (${hourlyCount}/${pkg.rows[0].hourly_limit})` };
   }
   return { allowed: true, used, limit };
 }
@@ -193,7 +204,7 @@ function createSMTPServer(port, secure = false) {
           const emailRecord = await db.query(
             `INSERT INTO emails
               (user_id, from_address, from_name, to_addresses, subject, status, tracking_id, size_bytes, ip_address)
-             VALUES ($1,$2,$3,$4,$5,'sent',$6,$7,$8) RETURNING id`,
+             VALUES ($1,$2,$3,$4,$5,'delivered',$6,$7,$8) RETURNING id`,
             [
               user.id,
               session.envelope.mailFrom.address,
@@ -208,7 +219,7 @@ function createSMTPServer(port, secure = false) {
 
           await db.query(
             `INSERT INTO email_events (email_id, event_type, ip_address)
-             VALUES ($1, 'sent', $2)`,
+             VALUES ($1, 'delivered', $2)`,
             [emailRecord.rows[0].id, session.remoteAddress || null]
           );
 

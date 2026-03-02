@@ -158,6 +158,21 @@ CREATE TABLE IF NOT EXISTS branding_settings (
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- Audit log for admin actions
+CREATE TABLE IF NOT EXISTS audit_logs (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  admin_id UUID REFERENCES users(id) ON DELETE SET NULL,
+  admin_email VARCHAR(255),
+  action VARCHAR(100) NOT NULL,
+  target_type VARCHAR(50),
+  target_id UUID,
+  details JSONB DEFAULT '{}',
+  ip_address INET,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_admin_id ON audit_logs(admin_id);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON audit_logs(created_at DESC);
+
 -- Default packages
 INSERT INTO packages (name, description, monthly_limit, daily_limit, hourly_limit, price, features) VALUES
   ('Free', 'Piano gratuito per iniziare', 1000, 100, 20, 0.00, '["1,000 email/mese", "Statistiche base", "1 dominio", "Tracking aperture"]'),

@@ -85,18 +85,29 @@ async function start() {
     // Run migrations
     await db.migrate();
 
-    // Create default admin if not exists
+    // Hash any SMTP passwords still stored in plaintext (idempotent)
     const bcrypt = require('bcryptjs');
     const crypto = require('crypto');
+    const { rows: usersToHash } = await db.query(
+      "SELECT id, smtp_password FROM users WHERE smtp_password NOT LIKE '$2%'"
+    );
+    for (const u of usersToHash) {
+      const h = await bcrypt.hash(u.smtp_password, 10);
+      await db.query('UPDATE users SET smtp_password=$1 WHERE id=$2', [h, u.id]);
+    }
+    if (usersToHash.length > 0) logger.info(`Hashed ${usersToHash.length} plaintext SMTP password(s)`);
+
+    // Create default admin if not exists
     const adminExists = await db.query("SELECT id FROM users WHERE role='admin' LIMIT 1");
     if (!adminExists.rows[0]) {
       const hash = await bcrypt.hash(config.admin.password, 12);
       const smtpUsername = 'smtp_admin_' + crypto.randomBytes(4).toString('hex');
       const smtpPassword = crypto.randomBytes(16).toString('base64url');
+      const smtpPasswordHash = await bcrypt.hash(smtpPassword, 10);
       await db.query(
         `INSERT INTO users (email, name, password_hash, smtp_username, smtp_password, role)
          VALUES ($1, 'Administrator', $2, $3, $4, 'admin')`,
-        [config.admin.email, hash, smtpUsername, smtpPassword]
+        [config.admin.email, hash, smtpUsername, smtpPasswordHash]
       );
       logger.info(`Admin created: ${config.admin.email}`);
     }
