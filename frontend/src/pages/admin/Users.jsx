@@ -2,7 +2,7 @@ import React, { useEffect, useState, useCallback } from 'react';
 import { getAdminUsers, createUser, updateUser, deleteUser, resetUserSmtp, resetUserPassword, getPackages, impersonateUser } from '../../api';
 import { useAuth } from '../../contexts/AuthContext';
 import { useNavigate } from 'react-router-dom';
-import { Plus, Search, Edit2, Trash2, RefreshCw, X, ChevronLeft, ChevronRight, LogIn, Key, Copy, Check, Shield } from 'lucide-react';
+import { Plus, Search, Edit2, Trash2, RefreshCw, X, ChevronLeft, ChevronRight, LogIn, Key, Copy, Check, Shield, UserCheck, UserX } from 'lucide-react';
 import toast from 'react-hot-toast';
 
 const STATUS_OPTIONS = ['active', 'suspended'];
@@ -276,6 +276,17 @@ export default function AdminUsers() {
     }
   };
 
+  const handleToggleStatus = async (user) => {
+    const newStatus = user.status === 'active' ? 'suspended' : 'active';
+    try {
+      await updateUser(user.id, { status: newStatus });
+      setUsers(prev => prev.map(u => u.id === user.id ? { ...u, status: newStatus } : u));
+      toast.success(newStatus === 'active' ? `${user.name} riattivato` : `${user.name} sospeso`);
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Errore');
+    }
+  };
+
   const handleSave = (updated) => {
     setUsers(prev => {
       const idx = prev.findIndex(u => u.id === updated.id);
@@ -388,6 +399,19 @@ export default function AdminUsers() {
                           <button onClick={() => setPwdModal(user)} className="p-1.5 text-slate-400 hover:text-violet-600 hover:bg-violet-50 dark:text-slate-500 dark:hover:text-violet-400 dark:hover:bg-violet-500/10 rounded-lg transition-colors" title="Reset Password Login"><Key size={14} /></button>
                           {user.role !== 'admin' && (
                             <button onClick={() => handleResetSmtp(user.id)} className="p-1.5 text-slate-400 hover:text-yellow-600 hover:bg-yellow-50 dark:text-slate-500 dark:hover:text-yellow-400 dark:hover:bg-yellow-500/10 rounded-lg transition-colors" title="Reset SMTP"><RefreshCw size={14} /></button>
+                          )}
+                          {user.id !== adminUser?.id && (
+                            <button
+                              onClick={() => handleToggleStatus(user)}
+                              className={`p-1.5 rounded-lg transition-colors ${
+                                user.status === 'active'
+                                  ? 'text-slate-400 hover:text-orange-600 hover:bg-orange-50 dark:text-slate-500 dark:hover:text-orange-400 dark:hover:bg-orange-500/10'
+                                  : 'text-orange-500 hover:text-emerald-600 hover:bg-emerald-50 dark:text-orange-400 dark:hover:text-emerald-400 dark:hover:bg-emerald-500/10'
+                              }`}
+                              title={user.status === 'active' ? 'Sospendi account' : 'Riattiva account'}
+                            >
+                              {user.status === 'active' ? <UserX size={14} /> : <UserCheck size={14} />}
+                            </button>
                           )}
                           <button onClick={() => handleDelete(user.id, user.name)} disabled={user.id === adminUser?.id} className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 dark:text-slate-500 dark:hover:text-red-400 dark:hover:bg-red-500/10 rounded-lg transition-colors disabled:opacity-30 disabled:cursor-not-allowed" title="Elimina"><Trash2 size={14} /></button>
                         </div>

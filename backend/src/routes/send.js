@@ -73,10 +73,11 @@ router.post('/',
     try {
       // Get full user with package
       const { rows: userRows } = await db.query(
-        'SELECT smtp_username, package_id FROM users WHERE id=$1',
+        'SELECT smtp_username, package_id, status FROM users WHERE id=$1',
         [user.id]
       );
       if (!userRows[0]) return res.status(404).json({ error: 'Utente non trovato' });
+      if (userRows[0].status !== 'active') return res.status(403).json({ error: 'Account sospeso' });
 
       await checkAndIncrementUsage(user.id, userRows[0].package_id);
 
