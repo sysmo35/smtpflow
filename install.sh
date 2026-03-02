@@ -217,7 +217,10 @@ RELAY_PORT=25
 RELAY_SECURE=false
 RELAY_TLS_REJECT_UNAUTHORIZED=false
 
-# DKIM — chiave unica server-wide (approccio CNAME, come Mailgun/Brevo)
+# DKIM
+DKIM_KEYS_DIR=${APP_DIR}/keys
+DKIM_MODE=vps
+DKIM_SYNC_SCRIPT=${APP_DIR}/sync-dkim.sh
 
 # Bounce handling
 BOUNCE_SECRET=${BOUNCE_SECRET}
@@ -307,7 +310,10 @@ BOUNCE_MESSAGE=""
 if echo "$EMAIL" | grep -qiP 'Status:\s+4\.'; then
   BOUNCE_TYPE="soft"
 fi
-BOUNCE_MESSAGE=$(echo "$EMAIL" | grep -iP 'Diagnostic-Code:' | head -1 | sed 's/[Dd]iagnostic-[Cc]ode:\s*//' | cut -c1-200)
+BOUNCE_MESSAGE=$(echo "$EMAIL" | \
+    awk 'BEGIN{p=0} /^[Dd]iagnostic-[Cc]ode:/{p=1; sub(/^[Dd]iagnostic-[Cc]ode:[ \t]*/,""); printf "%s",$0; next} p && /^[ \t]/{sub(/^[ \t]+/," "); printf "%s",$0; next} p{exit}' | \
+    sed 's/^smtp;[ ]*//' | tr -d '\r' | xargs | cut -c1-500)
+[[ -z "$BOUNCE_MESSAGE" ]] && BOUNCE_MESSAGE=$(echo "$EMAIL" | grep -oP '(5|4)[0-9]{2}[-. ][^\r\n]+' | head -1 | cut -c1-300)
 
 ENV_FILE="$(dirname "$0")/backend/.env"
 BOUNCE_SECRET=$(grep '^BOUNCE_SECRET=' "$ENV_FILE" 2>/dev/null | cut -d= -f2- | tr -d '"')
@@ -394,6 +400,22 @@ postconf -e "non_smtpd_milters = inet:localhost:12301"
 systemctl enable opendkim --quiet 2>/dev/null || true
 systemctl restart opendkim 2>/dev/null || true
 systemctl restart postfix
+
+# Estrai public key e aggiungila al .env
+DKIM_PUB=$(grep -oP 'p=[^"]+' "${DKIM_KEY_DIR}/smtpflow.txt" | tr -d '\n ' | sed 's/p=//')
+grep -q 'DKIM_PUBLIC_KEY' "$APP_DIR/backend/.env" || \
+    echo "DKIM_PUBLIC_KEY=${DKIM_PUB}" >> "$APP_DIR/backend/.env"
+
+# Copia sync-dkim.sh (aggiorna OpenDKIM per ogni nuovo dominio cliente)
+cp "$SCRIPT_DIR/scripts/sync-dkim.sh" "$APP_DIR/sync-dkim.sh"
+chmod +x "$APP_DIR/sync-dkim.sh"
+
+# Sudoers: l'utente app può eseguire sync-dkim.sh come root senza password
+cat > /etc/sudoers.d/smtpflow-dkim << SUDOERS
+${APP_USER} ALL=(root) NOPASSWD: ${APP_DIR}/sync-dkim.sh
+SUDOERS
+chmod 440 /etc/sudoers.d/smtpflow-dkim
+
 success "OpenDKIM configurato (chiave server-wide)"
 
 # ── Configure Rspamd ──────────────────────────────────────────
