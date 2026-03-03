@@ -10,3 +10,5 @@ ssl/
 keys/
 /opt/
 .DS_Store
+.env.docker
+frontend/package-lock.json
