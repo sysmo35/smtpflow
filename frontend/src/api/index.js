@@ -29,6 +29,7 @@ export default api;
 export const login = (data) => api.post('/auth/login', data);
 export const register = (data) => api.post('/auth/register', data);
 export const getMe = () => api.get('/auth/me');
+export const ssoValidate = (token) => api.get('/auth/sso', { params: { token } });
 
 // User
 export const getDashboard = () => api.get('/user/dashboard');
@@ -65,3 +66,8 @@ export const getPackages = () => api.get('/admin/packages');
 export const createPackage = (data) => api.post('/admin/packages', data);
 export const updatePackage = (id, data) => api.put(`/admin/packages/${id}`, data);
 export const deletePackage = (id) => api.delete(`/admin/packages/${id}`);
+
+// Admin Settings
+export const getAdminSettings = () => api.get('/admin/settings');
+export const updateAdminSettings = (data) => api.put('/admin/settings', data);
+export const generateProvisionKey = () => api.post('/admin/settings/generate-key');

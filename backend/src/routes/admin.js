@@ -313,6 +313,57 @@ router.post('/users/:id/impersonate', async (req, res) => {
   }
 });
 
+// ── SETTINGS ─────────────────────────────────────────────────
+
+// GET /api/admin/settings
+router.get('/settings', async (req, res) => {
+  try {
+    const { rows } = await db.query('SELECT key, value FROM app_settings');
+    const settings = {};
+    for (const row of rows) {
+      // Mask sensitive values
+      settings[row.key] = row.key === 'provision_api_key' && row.value
+        ? row.value.substring(0, 4) + '****'
+        : row.value;
+    }
+    // Include whether a key is set (from DB or env)
+    const envKey = process.env.PROVISION_API_KEY || '';
+    const dbKey = rows.find(r => r.key === 'provision_api_key')?.value || '';
+    settings.provision_api_key_set = !!(dbKey || envKey);
+    settings.provision_api_key_source = dbKey ? 'database' : (envKey ? 'env' : 'none');
+    res.json(settings);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// PUT /api/admin/settings
+router.put('/settings', async (req, res) => {
+  const { provision_api_key } = req.body;
+  if (!provision_api_key || provision_api_key.length < 16) {
+    return res.status(400).json({ error: 'provision_api_key deve essere almeno 16 caratteri' });
+  }
+  try {
+    await db.query(
+      `INSERT INTO app_settings (key, value, updated_at)
+       VALUES ('provision_api_key', $1, NOW())
+       ON CONFLICT (key) DO UPDATE SET value=$1, updated_at=NOW()`,
+      [provision_api_key]
+    );
+    await auditLog(req.user, 'settings.updated', 'settings', null, { key: 'provision_api_key' }, req.ip);
+    res.json({ success: true, message: 'API key aggiornata' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/admin/settings/generate-key — genera una nuova chiave casuale
+router.post('/settings/generate-key', async (req, res) => {
+  const crypto = require('crypto');
+  const newKey = 'sf_' + crypto.randomBytes(24).toString('base64url');
+  res.json({ key: newKey });
+});
+
 // GET /api/admin/audit
 router.get('/audit', async (req, res) => {
   const { page = 1, limit = 50 } = req.query;

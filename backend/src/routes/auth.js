@@ -93,4 +93,45 @@ router.get('/me', authenticate, (req, res) => {
   res.json({ user: req.user });
 });
 
+// GET /api/auth/sso?token=... — valida token SSO emesso da /api/provision/sso
+// Restituisce un JWT di sessione normale per auto-login del frontend.
+router.get('/sso', async (req, res) => {
+  const { token } = req.query;
+  if (!token) return res.status(400).json({ error: 'token is required' });
+
+  try {
+    let payload;
+    try {
+      payload = jwt.verify(token, config.jwt.secret);
+    } catch (e) {
+      return res.status(401).json({ error: 'Token SSO non valido o scaduto' });
+    }
+
+    if (payload.type !== 'sso') {
+      return res.status(401).json({ error: 'Token non è di tipo SSO' });
+    }
+
+    const { rows } = await db.query(
+      'SELECT id, email, name, role, status FROM users WHERE id=$1',
+      [payload.id]
+    );
+    const user = rows[0];
+    if (!user) return res.status(404).json({ error: 'Utente non trovato' });
+    if (user.status !== 'active') return res.status(403).json({ error: 'Account sospeso' });
+
+    const sessionToken = jwt.sign(
+      { id: user.id, role: user.role },
+      config.jwt.secret,
+      { expiresIn: config.jwt.expiresIn }
+    );
+
+    res.json({
+      token: sessionToken,
+      user: { id: user.id, email: user.email, name: user.name, role: user.role },
+    });
+  } catch (err) {
+    res.status(500).json({ error: 'Errore server' });
+  }
+});
+
 module.exports = router;

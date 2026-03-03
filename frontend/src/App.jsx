@@ -7,6 +7,7 @@ import { ThemeProvider, useTheme } from './contexts/ThemeContext';
 
 import Login from './pages/Login';
 import Register from './pages/Register';
+import SsoLogin from './pages/SsoLogin';
 import Layout from './components/Layout';
 
 // Admin pages
@@ -14,6 +15,7 @@ import AdminDashboard from './pages/admin/Dashboard';
 import AdminUsers from './pages/admin/Users';
 import AdminPackages from './pages/admin/Packages';
 import AdminBranding from './pages/admin/Branding';
+import AdminSettings from './pages/admin/Settings';
 
 // User pages
 import UserDashboard from './pages/user/Dashboard';
@@ -59,6 +61,7 @@ function AppRoutes() {
     <Routes>
       <Route path="/login" element={user ? <Navigate to={user.role === 'admin' ? '/admin' : '/dashboard'} replace /> : <Login />} />
       <Route path="/register" element={user ? <Navigate to="/dashboard" replace /> : <Register />} />
+      <Route path="/sso" element={<SsoLogin />} />
 
       {/* Admin routes */}
       <Route path="/admin" element={<ProtectedRoute adminOnly><Layout /></ProtectedRoute>}>
@@ -66,6 +69,7 @@ function AppRoutes() {
         <Route path="users" element={<AdminUsers />} />
         <Route path="packages" element={<AdminPackages />} />
         <Route path="branding" element={<AdminBranding />} />
+        <Route path="settings" element={<AdminSettings />} />
       </Route>
 
       {/* User routes */}

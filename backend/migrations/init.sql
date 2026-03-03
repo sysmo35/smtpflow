@@ -158,6 +158,13 @@ CREATE TABLE IF NOT EXISTS branding_settings (
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- App settings (key-value store for runtime configuration, e.g. PROVISION_API_KEY)
+CREATE TABLE IF NOT EXISTS app_settings (
+  key VARCHAR(100) PRIMARY KEY,
+  value TEXT NOT NULL DEFAULT '',
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
 -- Audit log for admin actions
 CREATE TABLE IF NOT EXISTS audit_logs (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
