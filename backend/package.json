@@ -1,6 +1,6 @@
 {
   "name": "smtpflow-backend",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "SMTPFlow - SaaS SMTP Server Backend",
   "main": "src/index.js",
   "scripts": {
