@@ -71,3 +71,15 @@ export const deletePackage = (id) => api.delete(`/admin/packages/${id}`);
 export const getAdminSettings = () => api.get('/admin/settings');
 export const updateAdminSettings = (data) => api.put('/admin/settings', data);
 export const generateProvisionKey = () => api.post('/admin/settings/generate-key');
+
+// Admin Suppression
+export const getSuppressionList = (params) => api.get('/admin/suppression', { params });
+export const addSuppression = (data) => api.post('/admin/suppression', data);
+export const removeSuppression = (email) => api.delete(`/admin/suppression/${encodeURIComponent(email)}`);
+
+// Admin System
+export const getSystemStats = () => api.get('/admin/system');
+
+// Auth — password reset
+export const forgotPassword = (data) => api.post('/auth/forgot-password', data);
+export const resetPassword = (data) => api.post('/auth/reset-password', data);

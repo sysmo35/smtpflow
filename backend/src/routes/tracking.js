@@ -1,5 +1,7 @@
 const express = require('express');
 const db = require('../database');
+const transporter = require('../services/relayTransporter');
+const config = require('../config');
 
 const router = express.Router();
 
@@ -120,6 +122,64 @@ router.post('/bounce', async (req, res) => {
          VALUES ($1, 'bounced', $2)`,
         [rows[0].id, JSON.stringify({ bounce_type, bounce_message })]
       );
+
+      // Aggiungi in suppression list su hard bounce
+      if ((bounce_type || 'hard') === 'hard') {
+        const { rows: emailData } = await db.query(
+          'SELECT to_addresses FROM emails WHERE id=$1', [rows[0].id]
+        );
+        const toAddr = emailData[0]?.to_addresses;
+        if (toAddr) {
+          await db.query(
+            `INSERT INTO suppression_list (email, reason, bounce_message)
+             VALUES ($1, 'hard_bounce', $2) ON CONFLICT (email) DO NOTHING`,
+            [toAddr.split(',')[0].trim().toLowerCase(), bounce_message || '']
+          );
+        }
+      }
+
+      // Notifica il mittente solo per hard bounce
+      if ((bounce_type || 'hard') === 'hard') {
+        setImmediate(async () => {
+          try {
+            const [{ rows: emailRows }, { rows: settingsRows }] = await Promise.all([
+              db.query('SELECT from_address, to_addresses, subject FROM emails WHERE id=$1', [rows[0].id]),
+              db.query("SELECT key, value FROM app_settings WHERE key IN ('bounce_notification_subject','bounce_notification_body')"),
+            ]);
+            const email = emailRows[0];
+            if (!email || !email.from_address) return;
+
+            const settings = Object.fromEntries(settingsRows.map(r => [r.key, r.value]));
+            const noreply = `noreply@${config.smtp.hostname}`;
+            const reason = bounce_message || 'Indirizzo inesistente o casella piena.';
+
+            const vars = {
+              '{to}': email.to_addresses || '',
+              '{subject}': email.subject || '(nessun oggetto)',
+              '{reason}': reason,
+            };
+            const replace = (tpl) => Object.entries(vars).reduce((s, [k, v]) => s.replaceAll(k, v), tpl);
+
+            const notifySubject = replace(
+              settings.bounce_notification_subject || 'Mancata consegna: {subject}'
+            );
+            const notifyBody = replace(
+              settings.bounce_notification_body ||
+              'La tua email non è stata consegnata a: {to}\nOggetto: {subject}\n\nMotivo: {reason}\n\nQuesto è un messaggio automatico, non rispondere.'
+            );
+
+            await transporter.sendMail({
+              envelope: { from: noreply, to: email.from_address },
+              from: `Mail Delivery <${noreply}>`,
+              to: email.from_address,
+              subject: notifySubject,
+              text: notifyBody,
+            });
+          } catch (e) {
+            // Non blocca il flusso principale
+          }
+        });
+      }
     }
 
     res.json({ success: true });

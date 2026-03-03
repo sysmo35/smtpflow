@@ -6,7 +6,7 @@ import { useTheme } from '../contexts/ThemeContext';
 import {
   LayoutDashboard, Users, Package, Mail, Key, Globe,
   LogOut, Menu, X, Activity, Zap, Palette, ArrowLeftCircle,
-  Sun, Moon, Settings,
+  Sun, Moon, Settings, ShieldOff, Server,
 } from 'lucide-react';
 
 const adminNav = [
@@ -14,6 +14,8 @@ const adminNav = [
   { to: '/admin/users', label: 'Utenti', icon: Users },
   { to: '/admin/packages', label: 'Pacchetti', icon: Package },
   { to: '/admin/branding', label: 'Branding', icon: Palette },
+  { to: '/admin/suppression', label: 'Suppression', icon: ShieldOff },
+  { to: '/admin/system', label: 'Sistema', icon: Server },
   { to: '/admin/settings', label: 'Impostazioni', icon: Settings },
 ];
 

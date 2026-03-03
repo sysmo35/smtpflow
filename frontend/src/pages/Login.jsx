@@ -95,12 +95,17 @@ export default function Login() {
             </button>
           </form>
 
-          <p className="text-center text-sm text-slate-500 dark:text-slate-400 mt-5">
-            Non hai un account?{' '}
-            <Link to="/register" className="text-brand-600 hover:text-brand-500 dark:text-brand-400 dark:hover:text-brand-300 font-medium transition-colors">
-              Registrati
+          <div className="flex items-center justify-between text-sm mt-5">
+            <Link to="/forgot-password" className="text-slate-500 hover:text-brand-600 dark:text-slate-400 dark:hover:text-brand-400 transition-colors">
+              Password dimenticata?
             </Link>
-          </p>
+            <span className="text-slate-500 dark:text-slate-400">
+              Non hai un account?{' '}
+              <Link to="/register" className="text-brand-600 hover:text-brand-500 dark:text-brand-400 dark:hover:text-brand-300 font-medium transition-colors">
+                Registrati
+              </Link>
+            </span>
+          </div>
         </div>
       </div>
     </div>

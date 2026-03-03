@@ -180,14 +180,10 @@ CREATE TABLE IF NOT EXISTS audit_logs (
 CREATE INDEX IF NOT EXISTS idx_audit_logs_admin_id ON audit_logs(admin_id);
 CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON audit_logs(created_at DESC);
 
--- Unique constraint on package name (prevents duplicate inserts on re-migration)
-ALTER TABLE packages DROP CONSTRAINT IF EXISTS packages_name_unique;
-ALTER TABLE packages ADD CONSTRAINT packages_name_unique UNIQUE (name);
-
 -- Default packages
 INSERT INTO packages (name, description, monthly_limit, daily_limit, hourly_limit, price, features) VALUES
   ('Free', 'Piano gratuito per iniziare', 1000, 100, 20, 0.00, '["1,000 email/mese", "Statistiche base", "1 dominio", "Tracking aperture"]'),
   ('Starter', 'Per piccole aziende', 10000, 500, 100, 9.99, '["10,000 email/mese", "Statistiche avanzate", "3 domini", "Tracking completo", "Bounce management"]'),
   ('Professional', 'Per aziende in crescita', 100000, 5000, 500, 49.99, '["100,000 email/mese", "Analytics avanzate", "10 domini", "Tracking completo", "API access", "Supporto prioritario"]'),
   ('Enterprise', 'Per grandi volumi', 1000000, 50000, 2000, 199.99, '["1,000,000 email/mese", "Statistiche in real-time", "Domini illimitati", "Tracking completo", "API access", "IP dedicato", "SLA 99.9%"]')
-ON CONFLICT (name) DO NOTHING;
+ON CONFLICT DO NOTHING;

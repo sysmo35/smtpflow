@@ -339,19 +339,45 @@ router.get('/settings', async (req, res) => {
 
 // PUT /api/admin/settings
 router.put('/settings', async (req, res) => {
-  const { provision_api_key } = req.body;
-  if (!provision_api_key || provision_api_key.length < 16) {
-    return res.status(400).json({ error: 'provision_api_key deve essere almeno 16 caratteri' });
-  }
+  const { provision_api_key, spf_record, dkim_selector } = req.body;
   try {
-    await db.query(
-      `INSERT INTO app_settings (key, value, updated_at)
-       VALUES ('provision_api_key', $1, NOW())
-       ON CONFLICT (key) DO UPDATE SET value=$1, updated_at=NOW()`,
-      [provision_api_key]
-    );
-    await auditLog(req.user, 'settings.updated', 'settings', null, { key: 'provision_api_key' }, req.ip);
-    res.json({ success: true, message: 'API key aggiornata' });
+    if (provision_api_key !== undefined) {
+      if (!provision_api_key || provision_api_key.length < 16) {
+        return res.status(400).json({ error: 'provision_api_key deve essere almeno 16 caratteri' });
+      }
+      await db.query(
+        `INSERT INTO app_settings (key, value, updated_at) VALUES ('provision_api_key', $1, NOW())
+         ON CONFLICT (key) DO UPDATE SET value=$1, updated_at=NOW()`,
+        [provision_api_key]
+      );
+    }
+    if (spf_record !== undefined) {
+      await db.query(
+        `INSERT INTO app_settings (key, value, updated_at) VALUES ('spf_record', $1, NOW())
+         ON CONFLICT (key) DO UPDATE SET value=$1, updated_at=NOW()`,
+        [spf_record]
+      );
+    }
+    if (dkim_selector !== undefined) {
+      const selector = (dkim_selector || 'smtpflow').trim().replace(/[^a-z0-9_-]/gi, '').toLowerCase();
+      await db.query(
+        `INSERT INTO app_settings (key, value, updated_at) VALUES ('dkim_selector', $1, NOW())
+         ON CONFLICT (key) DO UPDATE SET value=$1, updated_at=NOW()`,
+        [selector]
+      );
+    }
+    for (const key of ['bounce_notification_subject', 'bounce_notification_body',
+      'smtp_system_host', 'smtp_system_port', 'smtp_system_user', 'smtp_system_pass', 'smtp_system_from']) {
+      if (req.body[key] !== undefined) {
+        await db.query(
+          `INSERT INTO app_settings (key, value, updated_at) VALUES ($1, $2, NOW())
+           ON CONFLICT (key) DO UPDATE SET value=$2, updated_at=NOW()`,
+          [key, req.body[key]]
+        );
+      }
+    }
+    await auditLog(req.user, 'settings.updated', 'settings', null, { keys: Object.keys(req.body) }, req.ip);
+    res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -400,6 +426,97 @@ router.get('/emails', async (req, res) => {
       ORDER BY e.created_at DESC LIMIT $${params.length - 1} OFFSET $${params.length}
     `, params);
     res.json(rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── SUPPRESSION LIST ──────────────────────────────────────────
+
+// GET /api/admin/suppression
+router.get('/suppression', async (req, res) => {
+  const { page = 1, limit = 50, search = '' } = req.query;
+  const offset = (page - 1) * limit;
+  try {
+    const s = `%${search}%`;
+    const [{ rows }, count] = await Promise.all([
+      db.query(
+        'SELECT * FROM suppression_list WHERE email ILIKE $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3',
+        [s, limit, offset]
+      ),
+      db.query('SELECT COUNT(*) FROM suppression_list WHERE email ILIKE $1', [s]),
+    ]);
+    res.json({ items: rows, total: parseInt(count.rows[0].count) });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/admin/suppression
+router.post('/suppression', async (req, res) => {
+  const { email, reason = 'manual' } = req.body;
+  if (!email) return res.status(400).json({ error: 'Email richiesta' });
+  try {
+    await db.query(
+      `INSERT INTO suppression_list (email, reason) VALUES ($1, $2) ON CONFLICT (email) DO NOTHING`,
+      [email.toLowerCase().trim(), reason]
+    );
+    await auditLog(req.user, 'suppression.added', 'suppression', null, { email }, req.ip);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// DELETE /api/admin/suppression/:email
+router.delete('/suppression/:email', async (req, res) => {
+  const email = decodeURIComponent(req.params.email);
+  try {
+    await db.query('DELETE FROM suppression_list WHERE email=$1', [email.toLowerCase()]);
+    await auditLog(req.user, 'suppression.removed', 'suppression', null, { email }, req.ip);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── SYSTEM STATS ──────────────────────────────────────────────
+
+// GET /api/admin/system
+router.get('/system', async (req, res) => {
+  const os = require('os');
+  const { execSync } = require('child_process');
+
+  try {
+    // CPU: load average (1 min) / num CPUs
+    const load = os.loadavg()[0];
+    const cpus = os.cpus().length;
+    const cpuPercent = Math.min(Math.round((load / cpus) * 100), 100);
+
+    // RAM
+    const totalMem = os.totalmem();
+    const freeMem = os.freemem();
+    const usedMem = totalMem - freeMem;
+
+    // Disk (root partition)
+    let diskTotal = 0, diskUsed = 0, diskFree = 0;
+    try {
+      const dfOut = execSync("df -k / | tail -1", { timeout: 3000 }).toString().trim();
+      const parts = dfOut.split(/\s+/);
+      diskTotal = parseInt(parts[1]) * 1024;
+      diskUsed  = parseInt(parts[2]) * 1024;
+      diskFree  = parseInt(parts[3]) * 1024;
+    } catch {}
+
+    // Uptime
+    const uptimeSec = os.uptime();
+
+    res.json({
+      cpu: { percent: cpuPercent, load1: load.toFixed(2), cores: cpus },
+      ram: { total: totalMem, used: usedMem, free: freeMem, percent: Math.round((usedMem / totalMem) * 100) },
+      disk: { total: diskTotal, used: diskUsed, free: diskFree, percent: diskTotal ? Math.round((diskUsed / diskTotal) * 100) : 0 },
+      uptime: uptimeSec,
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

@@ -199,6 +199,10 @@ export default function Domains() {
                       <StatusIcon verified={domain.mx_verified} />
                       MX
                     </div>
+                    <div className="flex items-center gap-1 text-xs text-slate-500">
+                      <StatusIcon verified={domain.dmarc_verified} />
+                      DMARC
+                    </div>
                   </div>
                 </div>
 

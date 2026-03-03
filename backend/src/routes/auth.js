@@ -134,4 +134,99 @@ router.get('/sso', async (req, res) => {
   }
 });
 
+// Helper: crea transporter nodemailer con SMTP di sistema configurato dall'admin
+async function getSystemMailer() {
+  const { rows } = await db.query(
+    "SELECT key, value FROM app_settings WHERE key LIKE 'smtp_system_%'"
+  );
+  const s = Object.fromEntries(rows.map(r => [r.key, r.value]));
+  if (!s.smtp_system_host) return null;
+  const nodemailer = require('nodemailer');
+  return {
+    mailer: nodemailer.createTransport({
+      host: s.smtp_system_host,
+      port: parseInt(s.smtp_system_port || '587'),
+      secure: parseInt(s.smtp_system_port || '587') === 465,
+      auth: s.smtp_system_user ? { user: s.smtp_system_user, pass: s.smtp_system_pass } : undefined,
+    }),
+    from: s.smtp_system_from || `noreply@${config.smtp.hostname}`,
+  };
+}
+
+// POST /api/auth/forgot-password
+router.post('/forgot-password',
+  body('email').isEmail().normalizeEmail(),
+  async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+
+    // Rispondi sempre con successo (anti-enumeration)
+    res.json({ success: true });
+
+    setImmediate(async () => {
+      try {
+        const { email } = req.body;
+        const { rows } = await db.query(
+          "SELECT id, name FROM users WHERE email=$1 AND status='active'",
+          [email]
+        );
+        if (!rows[0]) return;
+
+        const system = await getSystemMailer();
+        if (!system) return;
+
+        const token = crypto.randomBytes(32).toString('hex');
+        const expiresAt = new Date(Date.now() + 60 * 60 * 1000); // 1 ora
+
+        await db.query(
+          'UPDATE password_reset_tokens SET used=true WHERE user_id=$1 AND used=false',
+          [rows[0].id]
+        );
+        await db.query(
+          'INSERT INTO password_reset_tokens (user_id, token, expires_at) VALUES ($1,$2,$3)',
+          [rows[0].id, token, expiresAt]
+        );
+
+        const resetUrl = `${config.app.baseUrl}/reset-password?token=${token}`;
+        await system.mailer.sendMail({
+          from: system.from,
+          to: email,
+          subject: 'Reset password',
+          text: `Ciao ${rows[0].name},\n\nHai richiesto il reset della password.\n\nClicca qui:\n${resetUrl}\n\nIl link scade tra 1 ora.\n\nSe non hai richiesto il reset, ignora questa email.`,
+        });
+      } catch (e) {}
+    });
+  }
+);
+
+// POST /api/auth/reset-password
+router.post('/reset-password',
+  body('token').notEmpty(),
+  body('password').isLength({ min: 8 }),
+  async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+
+    const { token, password } = req.body;
+    try {
+      const { rows } = await db.query(
+        `SELECT prt.id, prt.user_id FROM password_reset_tokens prt
+         WHERE prt.token=$1 AND prt.used=false AND prt.expires_at > NOW()`,
+        [token]
+      );
+      if (!rows[0]) return res.status(400).json({ error: 'Token non valido o scaduto' });
+
+      const passwordHash = await bcrypt.hash(password, 12);
+      await Promise.all([
+        db.query('UPDATE users SET password_hash=$1, updated_at=NOW() WHERE id=$2', [passwordHash, rows[0].user_id]),
+        db.query('UPDATE password_reset_tokens SET used=true WHERE id=$1', [rows[0].id]),
+      ]);
+
+      res.json({ success: true });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  }
+);
+
 module.exports = router;

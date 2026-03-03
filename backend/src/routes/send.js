@@ -81,8 +81,20 @@ router.post('/',
 
       await checkAndIncrementUsage(user.id, userRows[0].package_id);
 
-      const trackingId = uuidv4().replace(/-/g, '');
       const toAddresses = Array.isArray(to) ? to : [to];
+
+      // Check suppression list
+      const suppressed = await db.query(
+        'SELECT email FROM suppression_list WHERE LOWER(email) = ANY($1::text[])',
+        [toAddresses.map(a => a.toLowerCase())]
+      );
+      if (suppressed.rows.length > 0) {
+        return res.status(422).json({
+          error: `Indirizzo in suppression list: ${suppressed.rows.map(r => r.email).join(', ')}`,
+        });
+      }
+
+      const trackingId = uuidv4().replace(/-/g, '');
       const fromAddress = from || `${userRows[0].smtp_username}@${config.smtp.hostname}`;
       const fromDisplay = from_name ? `"${from_name}" <${fromAddress}>` : fromAddress;
       const bounceAddress = `bounce+${trackingId}@${config.smtp.hostname}`;
