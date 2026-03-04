@@ -55,6 +55,12 @@ export function AuthProvider({ children }) {
     setWorkspace(workspaceData);
   };
 
+  const updateWorkspaceName = (name) => {
+    const updated = { ...workspace, name };
+    localStorage.setItem('workspace', JSON.stringify(updated));
+    setWorkspace(updated);
+  };
+
   const logout = () => {
     if (impersonating) {
       stopImpersonating();
@@ -106,7 +112,7 @@ export function AuthProvider({ children }) {
 
   return (
     <AuthContext.Provider value={{
-      user, workspace, loading, login, logout, switchWorkspace,
+      user, workspace, loading, login, logout, switchWorkspace, updateWorkspaceName,
       isAdmin: user?.role === 'admin' && !impersonating,
       impersonating,
       impersonate,

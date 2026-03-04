@@ -88,6 +88,7 @@ export const resetPassword = (data) => api.post('/auth/reset-password', data);
 export const getWorkspaces = () => api.get('/user/workspaces');
 export const getCurrentWorkspace = () => api.get('/user/workspaces/current');
 export const switchWorkspace = (id) => api.post(`/user/workspaces/${id}/switch`);
+export const renameWorkspace = (id, name) => api.put(`/user/workspaces/${id}/rename`, { name });
 
 // Admin Workspaces
 export const getAdminWorkspaces = (params) => api.get('/admin/workspaces', { params });

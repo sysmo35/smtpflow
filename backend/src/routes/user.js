@@ -11,6 +11,7 @@ router.use(authenticate);
 
 // GET /api/user/dashboard
 router.get('/dashboard', async (req, res) => {
+  if (!req.workspace) return res.status(403).json({ error: 'No workspace' });
   const wsId = req.workspace.id;
   try {
     const yearMonth = new Date().toISOString().slice(0, 7);

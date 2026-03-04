@@ -53,4 +53,20 @@ router.post('/:id/switch', async (req, res) => {
   }
 });
 
+// PUT /api/user/workspaces/:id/rename
+router.put('/:id/rename', async (req, res) => {
+  const { name } = req.body;
+  if (!name?.trim()) return res.status(400).json({ error: 'Name required' });
+  try {
+    const { rows } = await db.query(
+      'UPDATE workspaces SET name=$1, updated_at=NOW() WHERE id=$2 AND user_id=$3 RETURNING *',
+      [name.trim(), req.params.id, req.user.id]
+    );
+    if (!rows[0]) return res.status(404).json({ error: 'Not found' });
+    res.json(rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 module.exports = router;

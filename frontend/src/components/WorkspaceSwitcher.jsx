@@ -1,16 +1,18 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
-import { getWorkspaces, switchWorkspace as apiSwitchWorkspace } from '../api';
-import { ChevronsUpDown, Check, Layers } from 'lucide-react';
+import { getWorkspaces, switchWorkspace as apiSwitchWorkspace, renameWorkspace } from '../api';
+import { ChevronsUpDown, Check, Layers, Pencil } from 'lucide-react';
 import toast from 'react-hot-toast';
 
 export default function WorkspaceSwitcher() {
-  const { workspace, switchWorkspace } = useAuth();
+  const { workspace, switchWorkspace, updateWorkspaceName } = useAuth();
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
   const [workspaces, setWorkspaces] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [editing, setEditing] = useState(null);
+  const [editName, setEditName] = useState('');
   const ref = useRef(null);
 
   // Close dropdown on outside click
@@ -47,6 +49,26 @@ export default function WorkspaceSwitcher() {
     }
   };
 
+  const startEdit = (ws) => {
+    setEditing(ws.id);
+    setEditName(ws.name);
+  };
+
+  const commitRename = async (wsId) => {
+    const trimmed = editName.trim();
+    const original = workspaces.find(w => w.id === wsId)?.name;
+    setEditing(null);
+    if (!trimmed || trimmed === original) return;
+    try {
+      await renameWorkspace(wsId, trimmed);
+      setWorkspaces(prev => prev.map(w => w.id === wsId ? { ...w, name: trimmed } : w));
+      if (wsId === workspace?.id) updateWorkspaceName(trimmed);
+      toast.success('Rinominato');
+    } catch {
+      toast.error('Errore rinomina');
+    }
+  };
+
   const displayName = workspace?.name || 'Workspace';
 
   return (
@@ -72,26 +94,51 @@ export default function WorkspaceSwitcher() {
           ) : (
             <ul className="py-1 max-h-60 overflow-y-auto">
               {workspaces.map(ws => (
-                <li key={ws.id}>
-                  <button
-                    onClick={() => handleSwitch(ws)}
-                    className="w-full flex items-center gap-2.5 px-4 py-2.5 text-sm text-left hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors"
-                  >
-                    <div className="flex-1 min-w-0">
-                      <div className="font-medium text-slate-800 dark:text-slate-200 truncate">{ws.name}</div>
-                      {ws.package_name && (
-                        <div className="text-xs text-slate-500 truncate">{ws.package_name}</div>
-                      )}
+                <li key={ws.id} className="group flex items-center hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors">
+                  {editing === ws.id ? (
+                    <div className="flex-1 px-4 py-2">
+                      <input
+                        className="w-full text-sm border border-slate-300 dark:border-slate-600 rounded px-2 py-1 bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200 outline-none focus:border-brand-500"
+                        value={editName}
+                        autoFocus
+                        onChange={e => setEditName(e.target.value)}
+                        onKeyDown={e => {
+                          if (e.key === 'Enter') commitRename(ws.id);
+                          if (e.key === 'Escape') setEditing(null);
+                        }}
+                        onBlur={() => commitRename(ws.id)}
+                      />
                     </div>
-                    {ws.id === workspace?.id && (
-                      <Check size={14} className="text-brand-500 shrink-0" />
-                    )}
-                    {ws.status !== 'active' && (
-                      <span className="text-xs text-amber-500 bg-amber-100 dark:bg-amber-900/30 px-1.5 py-0.5 rounded shrink-0">
-                        {ws.status}
-                      </span>
-                    )}
-                  </button>
+                  ) : (
+                    <>
+                      <button
+                        onClick={() => handleSwitch(ws)}
+                        className="flex-1 flex items-center gap-2.5 px-4 py-2.5 text-sm text-left"
+                      >
+                        <div className="flex-1 min-w-0">
+                          <div className="font-medium text-slate-800 dark:text-slate-200 truncate">{ws.name}</div>
+                          {ws.package_name && (
+                            <div className="text-xs text-slate-500 truncate">{ws.package_name}</div>
+                          )}
+                        </div>
+                        {ws.id === workspace?.id && (
+                          <Check size={14} className="text-brand-500 shrink-0" />
+                        )}
+                        {ws.status !== 'active' && (
+                          <span className="text-xs text-amber-500 bg-amber-100 dark:bg-amber-900/30 px-1.5 py-0.5 rounded shrink-0">
+                            {ws.status}
+                          </span>
+                        )}
+                      </button>
+                      <button
+                        onClick={() => startEdit(ws)}
+                        className="opacity-0 group-hover:opacity-100 mr-3 p-1 rounded hover:bg-slate-200 dark:hover:bg-slate-600 shrink-0"
+                        title="Rinomina"
+                      >
+                        <Pencil size={12} className="text-slate-400" />
+                      </button>
+                    </>
+                  )}
                 </li>
               ))}
             </ul>

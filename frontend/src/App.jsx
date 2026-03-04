@@ -48,7 +48,7 @@ function ThemedToaster() {
   );
 }
 
-function ProtectedRoute({ children, adminOnly = false }) {
+function ProtectedRoute({ children, adminOnly = false, userOnly = false }) {
   const { user, loading } = useAuth();
   if (loading) return (
     <div className="min-h-screen bg-slate-50 dark:bg-surface-900 flex items-center justify-center">
@@ -57,6 +57,7 @@ function ProtectedRoute({ children, adminOnly = false }) {
   );
   if (!user) return <Navigate to="/login" replace />;
   if (adminOnly && user.role !== 'admin') return <Navigate to="/dashboard" replace />;
+  if (userOnly && user.role === 'admin') return <Navigate to="/admin" replace />;
   return children;
 }
 
@@ -83,7 +84,7 @@ function AppRoutes() {
       </Route>
 
       {/* User routes */}
-      <Route path="/" element={<ProtectedRoute><Layout /></ProtectedRoute>}>
+      <Route path="/" element={<ProtectedRoute userOnly><Layout /></ProtectedRoute>}>
         <Route path="dashboard" element={<UserDashboard />} />
         <Route path="history" element={<UserHistory />} />
         <Route path="credentials" element={<UserCredentials />} />

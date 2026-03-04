@@ -96,7 +96,7 @@ router.get('/info', async (req, res) => {
 // ── POST /api/provision/create ───────────────────────────────
 // Pattern: find-or-create user, ALWAYS create new workspace.
 router.post('/create', async (req, res) => {
-  const { email, name, package_id, service_id } = req.body;
+  const { email, name, package_id, service_id, workspace_name } = req.body;
   if (!email || !name) return res.status(400).json({ error: 'email and name are required' });
 
   try {
@@ -132,10 +132,11 @@ router.post('/create', async (req, res) => {
     const wsSmtpPassword = crypto.randomBytes(16).toString('base64url');
     const wsSmtpPasswordHash = await bcrypt.hash(wsSmtpPassword, 10);
 
+    const wsName = workspace_name || (service_id ? `Service #${service_id}` : 'Workspace');
     const { rows: wsRows } = await db.query(
       `INSERT INTO workspaces (user_id, name, smtp_username, smtp_password, package_id, status, whmcs_service_id)
-       VALUES ($1, 'Default', $2, $3, $4, 'active', $5) RETURNING id`,
-      [userId, wsSmtpUsername, wsSmtpPasswordHash, package_id || null, service_id || null]
+       VALUES ($1, $2, $3, $4, $5, 'active', $6) RETURNING id`,
+      [userId, wsName, wsSmtpUsername, wsSmtpPasswordHash, package_id || null, service_id || null]
     );
     const workspaceId = wsRows[0].id;
     logger.info(`Provision create: workspace ${workspaceId} for user ${email} (service_id=${service_id})`);
@@ -321,6 +322,89 @@ router.post('/sso', async (req, res) => {
     res.json({ success: true, token, redirect_url: redirectUrl });
   } catch (err) {
     logger.error('Provision SSO error', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── POST /api/provision/reset-password ───────────────────────
+router.post('/reset-password', async (req, res) => {
+  const { service_id, email } = req.body;
+  try {
+    let userId;
+    if (service_id) {
+      const ws = await db.query(
+        'SELECT user_id FROM workspaces WHERE whmcs_service_id=$1',
+        [service_id]
+      );
+      if (!ws.rows[0]) return res.status(404).json({ error: 'Workspace not found' });
+      userId = ws.rows[0].user_id;
+    } else if (email) {
+      const u = await db.query("SELECT id FROM users WHERE email=$1 AND role='user'", [email]);
+      if (!u.rows[0]) return res.status(404).json({ error: 'User not found' });
+      userId = u.rows[0].id;
+    } else {
+      return res.status(400).json({ error: 'service_id or email required' });
+    }
+    const newPassword = crypto.randomBytes(12).toString('base64url');
+    const hash = await bcrypt.hash(newPassword, 12);
+    await db.query('UPDATE users SET password_hash=$1, updated_at=NOW() WHERE id=$2', [hash, userId]);
+    logger.info(`Provision: reset web password for user_id=${userId}`);
+    res.json({ success: true, web_password: newPassword });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── GET /api/provision/workspace-domains ─────────────────────
+router.get('/workspace-domains', async (req, res) => {
+  const { service_id } = req.query;
+  if (!service_id) return res.status(400).json({ error: 'service_id required' });
+  try {
+    const ws = await db.query(
+      'SELECT id FROM workspaces WHERE whmcs_service_id=$1',
+      [service_id]
+    );
+    if (!ws.rows[0]) return res.status(404).json({ error: 'Workspace not found' });
+    const { rows } = await db.query(
+      `SELECT domain, spf_verified, dkim_verified, dmarc_verified, created_at
+       FROM domains WHERE workspace_id=$1 ORDER BY created_at DESC`,
+      [ws.rows[0].id]
+    );
+    res.json({ success: true, domains: rows });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── GET /api/provision/workspace-stats ───────────────────────
+router.get('/workspace-stats', async (req, res) => {
+  const { service_id } = req.query;
+  if (!service_id) return res.status(400).json({ error: 'service_id required' });
+  try {
+    const ws = await db.query(
+      "SELECT id FROM workspaces WHERE whmcs_service_id=$1 AND status='active'",
+      [service_id]
+    );
+    if (!ws.rows[0]) return res.status(404).json({ error: 'Workspace not found' });
+    const wsId = ws.rows[0].id;
+    const yearMonth = new Date().toISOString().slice(0, 7);
+    const [domains, usage] = await Promise.all([
+      db.query(
+        "SELECT COUNT(*) as total, COUNT(CASE WHEN spf_verified THEN 1 END) as verified FROM domains WHERE workspace_id=$1",
+        [wsId]
+      ),
+      db.query(
+        "SELECT COALESCE(email_count,0) as count FROM monthly_usage WHERE workspace_id=$1 AND year_month=$2",
+        [wsId, yearMonth]
+      ),
+    ]);
+    res.json({
+      success: true,
+      active_domains: parseInt(domains.rows[0].total),
+      verified_domains: parseInt(domains.rows[0].verified),
+      emails_month: parseInt(usage.rows[0]?.count || 0),
+    });
+  } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
