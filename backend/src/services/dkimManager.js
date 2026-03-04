@@ -22,12 +22,12 @@ const SYNC_SCRIPT   = process.env.DKIM_SYNC_SCRIPT || '/opt/smtpflow/sync-dkim.s
  * Registra la chiave DKIM privata di un dominio.
  * Chiamare dopo che il dominio è verificato via SPF.
  */
-async function registerDomainDkim(domain, privateKeyPem) {
+async function registerDomainDkim(domain, privateKeyPem, selector = 'smtpflow') {
   try {
     const domainDir = path.join(DKIM_KEYS_DIR, domain);
     fs.mkdirSync(domainDir, { recursive: true });
 
-    const keyPath = path.join(domainDir, 'smtpflow.private');
+    const keyPath = path.join(domainDir, `${selector}.private`);
     fs.writeFileSync(keyPath, privateKeyPem, { mode: 0o600 });
 
     if (DKIM_MODE === 'vps') {

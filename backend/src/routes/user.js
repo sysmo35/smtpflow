@@ -67,8 +67,14 @@ router.get('/dashboard', async (req, res) => {
 
 // Helper: legge il record SPF configurato dall'admin (con fallback)
 async function getSpfRecord() {
-  const res = await db.query("SELECT value FROM branding_settings WHERE key='spf_record'");
+  const res = await db.query("SELECT value FROM app_settings WHERE key='spf_record'");
   return res.rows[0]?.value || `v=spf1 include:_spf.${config.smtp.hostname} ~all`;
+}
+
+// Helper: legge il DKIM selector configurato dall'admin (con fallback)
+async function getDkimSelector() {
+  const res = await db.query("SELECT value FROM app_settings WHERE key='dkim_selector'");
+  return res.rows[0]?.value || 'smtpflow';
 }
 
 // GET /api/user/credentials
@@ -188,17 +194,16 @@ router.post('/domains', async (req, res) => {
     const verificationToken = crypto.randomBytes(16).toString('hex');
     const { privateKeyPem, dkimPublicKey } = generateDkimKeyPair();
 
-    const [{ rows }, spfRecord] = await Promise.all([
-      db.query(
-        `INSERT INTO domains (user_id, domain, dkim_selector, dkim_public_key, verification_token)
-         VALUES ($1,$2,$3,$4,$5) RETURNING id, domain, status, dkim_selector, dkim_public_key, verification_token, created_at`,
-        [req.user.id, domain.toLowerCase(), 'smtpflow', dkimPublicKey, verificationToken]
-      ),
-      getSpfRecord(),
-    ]);
+    const [spfRecord, dkimSelector] = await Promise.all([getSpfRecord(), getDkimSelector()]);
+
+    const { rows } = await db.query(
+      `INSERT INTO domains (user_id, domain, dkim_selector, dkim_public_key, verification_token)
+       VALUES ($1,$2,$3,$4,$5) RETURNING id, domain, status, dkim_selector, dkim_public_key, verification_token, created_at`,
+      [req.user.id, domain.toLowerCase(), dkimSelector, dkimPublicKey, verificationToken]
+    );
 
     // Register private key with DKIM manager (non-blocking)
-    registerDomainDkim(domain.toLowerCase(), privateKeyPem).catch(() => {});
+    registerDomainDkim(domain.toLowerCase(), privateKeyPem, dkimSelector).catch(() => {});
 
     res.status(201).json({
       ...rows[0],
@@ -221,23 +226,38 @@ router.post('/domains/:id/verify', async (req, res) => {
   const domain = rows[0];
   const dns = require('dns').promises;
 
-  let spfVerified = false, dkimVerified = false, mxVerified = false;
+  let spfVerified = false, dkimVerified = false, mxVerified = false, dmarcVerified = false;
 
   try {
-    // Check SPF
+    // Check SPF — verifica che il record contenga l'IP o include configurato dall'admin
+    const configuredSpf = await getSpfRecord();
+    const spfTokens = configuredSpf.split(/\s+/).filter(t =>
+      t.startsWith('ip4:') || t.startsWith('ip6:') || t.startsWith('include:')
+    );
     const txtRecords = await dns.resolveTxt(domain.domain).catch(() => []);
-    spfVerified = txtRecords.some(r => r.join('').includes('v=spf1'));
+    const domainSpf = txtRecords.map(r => r.join('')).find(r => r.includes('v=spf1')) || '';
+    spfVerified = spfTokens.length > 0
+      ? spfTokens.some(token => domainSpf.includes(token))
+      : domainSpf.includes('v=spf1');
 
     // Check MX
     const mxRecords = await dns.resolveMx(domain.domain).catch(() => []);
     mxVerified = mxRecords.length > 0;
 
-    // Check DKIM — il cliente deve aggiungere un record TXT con v=DKIM1
+    // Check DKIM
     try {
-      const dkimTxt = await dns.resolveTxt(`smtpflow._domainkey.${domain.domain}`).catch(() => []);
+      const dkimTxt = await dns.resolveTxt(`${domain.dkim_selector}._domainkey.${domain.domain}`).catch(() => []);
       dkimVerified = dkimTxt.some(r => r.join('').includes('v=DKIM1'));
     } catch (e) {
       dkimVerified = false;
+    }
+
+    // Check DMARC
+    try {
+      const dmarcTxt = await dns.resolveTxt(`_dmarc.${domain.domain}`).catch(() => []);
+      dmarcVerified = dmarcTxt.some(r => r.join('').includes('v=DMARC1'));
+    } catch (e) {
+      dmarcVerified = false;
     }
   } catch (e) {}
 
@@ -246,8 +266,8 @@ router.post('/domains/:id/verify', async (req, res) => {
 
   const [{ rows: updated }, spfRecord] = await Promise.all([
     db.query(
-      'UPDATE domains SET spf_verified=$1, dkim_verified=$2, mx_verified=$3, status=$4, updated_at=NOW() WHERE id=$5 RETURNING *',
-      [spfVerified, dkimVerified, mxVerified, newStatus, domain.id]
+      'UPDATE domains SET spf_verified=$1, dkim_verified=$2, mx_verified=$3, dmarc_verified=$4, status=$5, updated_at=NOW() WHERE id=$6 RETURNING *',
+      [spfVerified, dkimVerified, mxVerified, dmarcVerified, newStatus, domain.id]
     ),
     getSpfRecord(),
   ]);
@@ -291,12 +311,12 @@ function getDnsRecords(domain, domainRow, spfRecord) {
     },
     {
       type: 'TXT',
-      host: 'smtpflow._domainkey',
+      host: `${domainRow?.dkim_selector || 'smtpflow'}._domainkey`,
       value: domainRow?.dkim_public_key
         ? `v=DKIM1; h=sha256; k=rsa; p=${domainRow.dkim_public_key}`
         : config.dkim?.publicKey
           ? `v=DKIM1; h=sha256; k=rsa; p=${config.dkim.publicKey}`
-          : `smtpflow._domainkey.${hostname}`,
+          : `${domainRow?.dkim_selector || 'smtpflow'}._domainkey.${hostname}`,
       description: 'DKIM — firma digitale',
       required: false,
     },
