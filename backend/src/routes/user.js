@@ -11,13 +11,13 @@ router.use(authenticate);
 
 // GET /api/user/dashboard
 router.get('/dashboard', async (req, res) => {
-  const userId = req.user.id;
+  const wsId = req.workspace.id;
   try {
     const yearMonth = new Date().toISOString().slice(0, 7);
 
     const [usage, pkg, stats, recentEmails, trend] = await Promise.all([
-      db.query('SELECT * FROM monthly_usage WHERE user_id=$1 AND year_month=$2', [userId, yearMonth]),
-      db.query('SELECT * FROM packages WHERE id=(SELECT package_id FROM users WHERE id=$1)', [userId]),
+      db.query('SELECT * FROM monthly_usage WHERE workspace_id=$1 AND year_month=$2', [wsId, yearMonth]),
+      db.query('SELECT * FROM packages WHERE id=$1', [req.workspace.package_id]),
       db.query(`
         SELECT
           COUNT(*) as total,
@@ -26,18 +26,18 @@ router.get('/dashboard', async (req, res) => {
           COUNT(CASE WHEN bounced THEN 1 END) as bounced,
           COUNT(CASE WHEN spam_reported THEN 1 END) as spam,
           COUNT(CASE WHEN created_at > NOW()-INTERVAL'24h' THEN 1 END) as today
-        FROM emails WHERE user_id=$1 AND created_at > NOW()-INTERVAL'30d'
-      `, [userId]),
+        FROM emails WHERE workspace_id=$1 AND created_at > NOW()-INTERVAL'30d'
+      `, [wsId]),
       db.query(`
         SELECT id, from_address, to_addresses, subject, status, opened, bounced, spam_reported, created_at
-        FROM emails WHERE user_id=$1
+        FROM emails WHERE workspace_id=$1
         ORDER BY created_at DESC LIMIT 10
-      `, [userId]),
+      `, [wsId]),
       db.query(`
         SELECT DATE(created_at) as date, COUNT(*) as count
-        FROM emails WHERE user_id=$1 AND created_at > NOW()-INTERVAL'30d'
+        FROM emails WHERE workspace_id=$1 AND created_at > NOW()-INTERVAL'30d'
         GROUP BY DATE(created_at) ORDER BY date
-      `, [userId]),
+      `, [wsId]),
     ]);
 
     const monthlyUsed = parseInt(usage.rows[0]?.email_count || 0);
@@ -80,15 +80,12 @@ async function getDkimSelector() {
 // GET /api/user/credentials
 router.get('/credentials', async (req, res) => {
   try {
-    const [userRes, spfRecord] = await Promise.all([
-      db.query('SELECT smtp_username, smtp_password FROM users WHERE id=$1', [req.user.id]),
-      getSpfRecord(),
-    ]);
+    const spfRecord = await getSpfRecord();
     res.json({
       smtp_host: config.smtp.hostname,
       smtp_port: config.smtp.port,
       smtp_port_ssl: config.smtp.portSSL,
-      smtp_username: userRes.rows[0].smtp_username,
+      smtp_username: req.workspace.smtp_username,
       smtp_password: null,
       smtp_encryption: 'STARTTLS/SSL',
       spf_record: spfRecord,
@@ -104,8 +101,8 @@ router.post('/credentials/reset', async (req, res) => {
   const newPassHash = await bcrypt.hash(newPass, 10);
   try {
     const { rows } = await db.query(
-      'UPDATE users SET smtp_password=$1, updated_at=NOW() WHERE id=$2 RETURNING smtp_username',
-      [newPassHash, req.user.id]
+      'UPDATE workspaces SET smtp_password=$1, updated_at=NOW() WHERE id=$2 RETURNING smtp_username',
+      [newPassHash, req.workspace.id]
     );
     res.json({
       smtp_host: config.smtp.hostname,
@@ -122,8 +119,8 @@ router.post('/credentials/reset', async (req, res) => {
 router.get('/emails', async (req, res) => {
   const { page = 1, limit = 20, status, search } = req.query;
   const offset = (page - 1) * limit;
-  const conditions = ['user_id=$1'];
-  const params = [req.user.id];
+  const conditions = ['workspace_id=$1'];
+  const params = [req.workspace.id];
 
   if (status) { params.push(status); conditions.push(`status=$${params.length}`); }
   if (search) { params.push(`%${search}%`); conditions.push(`(subject ILIKE $${params.length} OR to_addresses ILIKE $${params.length})`); }
@@ -153,8 +150,8 @@ router.get('/emails', async (req, res) => {
 router.get('/emails/:id', async (req, res) => {
   try {
     const { rows } = await db.query(
-      'SELECT * FROM emails WHERE id=$1 AND user_id=$2',
-      [req.params.id, req.user.id]
+      'SELECT * FROM emails WHERE id=$1 AND workspace_id=$2',
+      [req.params.id, req.workspace.id]
     );
     if (!rows[0]) return res.status(404).json({ error: 'Email non trovata' });
 
@@ -174,8 +171,8 @@ router.get('/emails/:id', async (req, res) => {
 router.get('/domains', async (req, res) => {
   try {
     const { rows } = await db.query(
-      'SELECT id, domain, status, spf_verified, dkim_verified, mx_verified, dkim_selector, dkim_public_key, verification_token, created_at FROM domains WHERE user_id=$1 ORDER BY created_at DESC',
-      [req.user.id]
+      'SELECT id, domain, status, spf_verified, dkim_verified, mx_verified, dkim_selector, dkim_public_key, verification_token, created_at FROM domains WHERE workspace_id=$1 ORDER BY created_at DESC',
+      [req.workspace.id]
     );
     res.json(rows);
   } catch (err) {
@@ -197,9 +194,9 @@ router.post('/domains', async (req, res) => {
     const [spfRecord, dkimSelector] = await Promise.all([getSpfRecord(), getDkimSelector()]);
 
     const { rows } = await db.query(
-      `INSERT INTO domains (user_id, domain, dkim_selector, dkim_public_key, verification_token)
-       VALUES ($1,$2,$3,$4,$5) RETURNING id, domain, status, dkim_selector, dkim_public_key, verification_token, created_at`,
-      [req.user.id, domain.toLowerCase(), dkimSelector, dkimPublicKey, verificationToken]
+      `INSERT INTO domains (user_id, workspace_id, domain, dkim_selector, dkim_public_key, verification_token)
+       VALUES ($1,$2,$3,$4,$5,$6) RETURNING id, domain, status, dkim_selector, dkim_public_key, verification_token, created_at`,
+      [req.user.id, req.workspace.id, domain.toLowerCase(), dkimSelector, dkimPublicKey, verificationToken]
     );
 
     // Register private key with DKIM manager (non-blocking)
@@ -218,8 +215,8 @@ router.post('/domains', async (req, res) => {
 // POST /api/user/domains/:id/verify
 router.post('/domains/:id/verify', async (req, res) => {
   const { rows } = await db.query(
-    'SELECT * FROM domains WHERE id=$1 AND user_id=$2',
-    [req.params.id, req.user.id]
+    'SELECT * FROM domains WHERE id=$1 AND workspace_id=$2',
+    [req.params.id, req.workspace.id]
   );
   if (!rows[0]) return res.status(404).json({ error: 'Dominio non trovato' });
 
@@ -229,7 +226,7 @@ router.post('/domains/:id/verify', async (req, res) => {
   let spfVerified = false, dkimVerified = false, mxVerified = false, dmarcVerified = false;
 
   try {
-    // Check SPF — verifica che il record contenga l'IP o include configurato dall'admin
+    // Check SPF
     const configuredSpf = await getSpfRecord();
     const spfTokens = configuredSpf.split(/\s+/).filter(t =>
       t.startsWith('ip4:') || t.startsWith('ip6:') || t.startsWith('include:')
@@ -261,7 +258,6 @@ router.post('/domains/:id/verify', async (req, res) => {
     }
   } catch (e) {}
 
-  // SPF è sufficiente per considerare il dominio verificato
   const newStatus = spfVerified ? 'verified' : 'pending';
 
   const [{ rows: updated }, spfRecord] = await Promise.all([
@@ -278,7 +274,7 @@ router.post('/domains/:id/verify', async (req, res) => {
 // GET /api/user/domains/:id/dns
 router.get('/domains/:id/dns', async (req, res) => {
   const [{ rows }, spfRecord] = await Promise.all([
-    db.query('SELECT * FROM domains WHERE id=$1 AND user_id=$2', [req.params.id, req.user.id]),
+    db.query('SELECT * FROM domains WHERE id=$1 AND workspace_id=$2', [req.params.id, req.workspace.id]),
     getSpfRecord(),
   ]);
   if (!rows[0]) return res.status(404).json({ error: 'Dominio non trovato' });
@@ -289,8 +285,8 @@ router.get('/domains/:id/dns', async (req, res) => {
 router.delete('/domains/:id', async (req, res) => {
   try {
     const { rows } = await db.query(
-      'DELETE FROM domains WHERE id=$1 AND user_id=$2 RETURNING domain',
-      [req.params.id, req.user.id]
+      'DELETE FROM domains WHERE id=$1 AND workspace_id=$2 RETURNING domain',
+      [req.params.id, req.workspace.id]
     );
     if (rows[0]) await removeDomainDkim(rows[0].domain);
     res.json({ success: true });

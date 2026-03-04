@@ -19,7 +19,7 @@ export default function SsoLogin() {
 
     ssoValidate(token)
       .then(res => {
-        login(res.data.token, res.data.user);
+        login(res.data.token, res.data.user, res.data.workspace);
         navigate(res.data.user.role === 'admin' ? '/admin' : '/dashboard', { replace: true });
       })
       .catch(err => {

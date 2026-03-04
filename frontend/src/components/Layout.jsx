@@ -3,15 +3,17 @@ import { Outlet, NavLink, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useBranding } from '../contexts/BrandingContext';
 import { useTheme } from '../contexts/ThemeContext';
+import WorkspaceSwitcher from './WorkspaceSwitcher';
 import {
   LayoutDashboard, Users, Package, Mail, Key, Globe,
   LogOut, Menu, X, Activity, Zap, Palette, ArrowLeftCircle,
-  Sun, Moon, Settings, ShieldOff, Server,
+  Sun, Moon, Settings, ShieldOff, Server, Layers,
 } from 'lucide-react';
 
 const adminNav = [
   { to: '/admin', label: 'Dashboard', icon: LayoutDashboard, end: true },
   { to: '/admin/users', label: 'Utenti', icon: Users },
+  { to: '/admin/workspaces', label: 'Workspace', icon: Layers },
   { to: '/admin/packages', label: 'Pacchetti', icon: Package },
   { to: '/admin/branding', label: 'Branding', icon: Palette },
   { to: '/admin/suppression', label: 'Suppression', icon: ShieldOff },
@@ -82,6 +84,9 @@ export default function Layout() {
           </button>
         )}
       </div>
+
+      {/* Workspace switcher (user only) */}
+      {!isAdmin && <WorkspaceSwitcher />}
 
       {/* Navigation */}
       <nav className="flex-1 px-4 py-4 space-y-1 overflow-y-auto">

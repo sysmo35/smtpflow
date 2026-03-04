@@ -31,13 +31,13 @@ function injectTracking(html, trackingId) {
   } catch (e) { return html; }
 }
 
-async function checkAndIncrementUsage(userId, packageId) {
+async function checkAndIncrementUsage(workspaceId, userId, packageId) {
   const yearMonth = new Date().toISOString().slice(0, 7);
   const [usage, pkg, dailyRes, hourlyRes] = await Promise.all([
-    db.query('SELECT email_count FROM monthly_usage WHERE user_id=$1 AND year_month=$2', [userId, yearMonth]),
+    db.query('SELECT email_count FROM monthly_usage WHERE workspace_id=$1 AND year_month=$2', [workspaceId, yearMonth]),
     db.query('SELECT monthly_limit, daily_limit, hourly_limit FROM packages WHERE id=$1', [packageId]),
-    db.query('SELECT COUNT(*) as count FROM emails WHERE user_id=$1 AND created_at >= CURRENT_DATE', [userId]),
-    db.query("SELECT COUNT(*) as count FROM emails WHERE user_id=$1 AND created_at >= NOW() - INTERVAL '1 hour'", [userId]),
+    db.query('SELECT COUNT(*) as count FROM emails WHERE workspace_id=$1 AND created_at >= CURRENT_DATE', [workspaceId]),
+    db.query("SELECT COUNT(*) as count FROM emails WHERE workspace_id=$1 AND created_at >= NOW() - INTERVAL '1 hour'", [workspaceId]),
   ]);
   const used = parseInt(usage.rows[0]?.email_count || 0);
   const limit = pkg.rows[0]?.monthly_limit || 1000;
@@ -51,9 +51,9 @@ async function checkAndIncrementUsage(userId, packageId) {
     throw Object.assign(new Error(`Limite orario raggiunto (${hourlyCount}/${pkg.rows[0].hourly_limit})`), { status: 429 });
 
   await db.query(
-    `INSERT INTO monthly_usage (user_id, year_month, email_count) VALUES ($1,$2,1)
-     ON CONFLICT (user_id, year_month) DO UPDATE SET email_count = monthly_usage.email_count + 1`,
-    [userId, yearMonth]
+    `INSERT INTO monthly_usage (workspace_id, user_id, year_month, email_count) VALUES ($1,$2,$3,1)
+     ON CONFLICT (workspace_id, year_month) DO UPDATE SET email_count = monthly_usage.email_count + 1`,
+    [workspaceId, userId, yearMonth]
   );
   return { used: used + 1, limit };
 }
@@ -68,18 +68,12 @@ router.post('/',
     if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
 
     const { to, from, from_name, subject, html, text, reply_to } = req.body;
-    const user = req.user;
+    const workspace = req.workspace;
 
     try {
-      // Get full user with package
-      const { rows: userRows } = await db.query(
-        'SELECT smtp_username, package_id, status FROM users WHERE id=$1',
-        [user.id]
-      );
-      if (!userRows[0]) return res.status(404).json({ error: 'Utente non trovato' });
-      if (userRows[0].status !== 'active') return res.status(403).json({ error: 'Account sospeso' });
+      if (workspace.status !== 'active') return res.status(403).json({ error: 'Account sospeso' });
 
-      await checkAndIncrementUsage(user.id, userRows[0].package_id);
+      await checkAndIncrementUsage(workspace.id, req.user.id, workspace.package_id);
 
       const toAddresses = Array.isArray(to) ? to : [to];
 
@@ -95,7 +89,7 @@ router.post('/',
       }
 
       const trackingId = uuidv4().replace(/-/g, '');
-      const fromAddress = from || `${userRows[0].smtp_username}@${config.smtp.hostname}`;
+      const fromAddress = from || `${workspace.smtp_username}@${config.smtp.hostname}`;
       const fromDisplay = from_name ? `"${from_name}" <${fromAddress}>` : fromAddress;
       const bounceAddress = `bounce+${trackingId}@${config.smtp.hostname}`;
 
@@ -116,9 +110,9 @@ router.post('/',
       });
 
       const { rows } = await db.query(
-        `INSERT INTO emails (user_id, from_address, from_name, to_addresses, subject, status, tracking_id, size_bytes)
-         VALUES ($1,$2,$3,$4,$5,'delivered',$6,$7) RETURNING id, tracking_id, created_at`,
-        [user.id, fromAddress, from_name || '', toAddresses.join(', '), subject, trackingId,
+        `INSERT INTO emails (workspace_id, user_id, from_address, from_name, to_addresses, subject, status, tracking_id, size_bytes)
+         VALUES ($1,$2,$3,$4,$5,$6,'delivered',$7,$8) RETURNING id, tracking_id, created_at`,
+        [workspace.id, req.user.id, fromAddress, from_name || '', toAddresses.join(', '), subject, trackingId,
          Buffer.byteLength(html || text || '', 'utf8')]
       );
 

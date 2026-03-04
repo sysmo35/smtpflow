@@ -17,7 +17,7 @@ export default function Login() {
     setLoading(true);
     try {
       const res = await loginApi(form);
-      login(res.data.token, res.data.user);
+      login(res.data.token, res.data.user, res.data.workspace);
       toast.success('Accesso effettuato!');
       navigate(res.data.user.role === 'admin' ? '/admin' : '/dashboard');
     } catch (err) {

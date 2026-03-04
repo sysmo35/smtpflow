@@ -14,6 +14,7 @@ const { startSMTPServers } = require('./services/smtpServer');
 const authRoutes = require('./routes/auth');
 const adminRoutes = require('./routes/admin');
 const userRoutes = require('./routes/user');
+const workspacesRoutes = require('./routes/workspaces');
 const sendRoutes = require('./routes/send');
 const trackingRoutes = require('./routes/tracking');
 const brandingRoutes = require('./routes/branding');
@@ -52,6 +53,7 @@ app.use('/api/auth/', rateLimit({
 // API Routes
 app.use('/api/auth', authRoutes);
 app.use('/api/admin', adminRoutes);
+app.use('/api/user/workspaces', workspacesRoutes);
 app.use('/api/user', userRoutes);
 app.use('/api/send', sendRoutes);
 app.use('/api/provision', provisionRoutes);

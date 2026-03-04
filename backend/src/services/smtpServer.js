@@ -14,7 +14,6 @@ function injectTracking(html, trackingId, baseUrl) {
   try {
     const $ = cheerio.load(html);
 
-    // Replace links with tracked versions
     $('a[href]').each((i, el) => {
       const href = $(el).attr('href');
       if (href && href.startsWith('http')) {
@@ -23,7 +22,6 @@ function injectTracking(html, trackingId, baseUrl) {
       }
     });
 
-    // Inject open tracking pixel before </body>
     const pixel = `<img src="${baseUrl}/t/open/${trackingId}" width="1" height="1" style="display:none;visibility:hidden;opacity:0;" alt="" />`;
     if ($('body').length) {
       $('body').append(pixel);
@@ -37,24 +35,31 @@ function injectTracking(html, trackingId, baseUrl) {
   }
 }
 
+// Returns a workspace+user merged object for SMTP auth
 async function getUserByCredentials(username, password) {
   const { rows } = await db.query(
-    'SELECT id, email, name, status, package_id, smtp_username, smtp_password FROM users WHERE smtp_username = $1',
+    `SELECT w.id, w.smtp_username, w.smtp_password, w.package_id, w.status as workspace_status,
+            u.id as user_id, u.email, u.name, u.status as user_status
+     FROM workspaces w
+     JOIN users u ON u.id = w.user_id
+     WHERE w.smtp_username = $1`,
     [username]
   );
-  if (!rows[0] || !(await bcrypt.compare(password, rows[0].smtp_password))) return null;
-  if (rows[0].status !== 'active') return null;
+  if (!rows[0]) return null;
+  if (!(await bcrypt.compare(password, rows[0].smtp_password))) return null;
+  if (rows[0].user_status !== 'active') return null;
+  if (rows[0].workspace_status !== 'active') return null;
   return rows[0];
 }
 
-async function checkRateLimit(userId, packageId) {
+async function checkRateLimit(workspaceId, packageId) {
   const yearMonth = new Date().toISOString().slice(0, 7);
 
   const [usage, pkg, dailyRes, hourlyRes] = await Promise.all([
-    db.query('SELECT email_count FROM monthly_usage WHERE user_id=$1 AND year_month=$2', [userId, yearMonth]),
+    db.query('SELECT email_count FROM monthly_usage WHERE workspace_id=$1 AND year_month=$2', [workspaceId, yearMonth]),
     db.query('SELECT monthly_limit, daily_limit, hourly_limit FROM packages WHERE id=$1', [packageId]),
-    db.query('SELECT COUNT(*) as count FROM emails WHERE user_id=$1 AND created_at >= CURRENT_DATE', [userId]),
-    db.query("SELECT COUNT(*) as count FROM emails WHERE user_id=$1 AND created_at >= NOW() - INTERVAL '1 hour'", [userId]),
+    db.query('SELECT COUNT(*) as count FROM emails WHERE workspace_id=$1 AND created_at >= CURRENT_DATE', [workspaceId]),
+    db.query("SELECT COUNT(*) as count FROM emails WHERE workspace_id=$1 AND created_at >= NOW() - INTERVAL '1 hour'", [workspaceId]),
   ]);
 
   const used = parseInt(usage.rows[0]?.email_count || 0);
@@ -74,14 +79,14 @@ async function checkRateLimit(userId, packageId) {
   return { allowed: true, used, limit };
 }
 
-async function incrementUsage(userId) {
+async function incrementUsage(workspaceId, userId) {
   const yearMonth = new Date().toISOString().slice(0, 7);
   await db.query(
-    `INSERT INTO monthly_usage (user_id, year_month, email_count)
-     VALUES ($1, $2, 1)
-     ON CONFLICT (user_id, year_month)
+    `INSERT INTO monthly_usage (workspace_id, user_id, year_month, email_count)
+     VALUES ($1, $2, $3, 1)
+     ON CONFLICT (workspace_id, year_month)
      DO UPDATE SET email_count = monthly_usage.email_count + 1`,
-    [userId, yearMonth]
+    [workspaceId, userId, yearMonth]
   );
 }
 
@@ -108,8 +113,6 @@ function loadTLSOptions() {
 }
 
 function createSMTPServer(port, secure = false) {
-  // smtp-server passa this.options (non this.options.tls) a getTLSOptions(),
-  // quindi cert/key devono essere al livello principale, non dentro tls: {}
   const tlsOpts = loadTLSOptions();
   const server = new SMTPServer({
     name: config.smtp.hostname,
@@ -122,23 +125,21 @@ function createSMTPServer(port, secure = false) {
     ...tlsOpts,
 
     onAuth(auth, session, callback) {
-      // smtp-server v3 usa auth.username/auth.password (v2 usava auth.credentials)
       const username = auth.username || (auth.credentials && auth.credentials.username);
       const password = auth.password || (auth.credentials && auth.credentials.password);
       getUserByCredentials(username, password)
-        .then(user => {
-          if (!user) {
+        .then(ws => {
+          if (!ws) {
             return callback(new Error('Invalid credentials'));
           }
-          session.smtpUser = user;
-          callback(null, { user: user.id });
+          session.smtpWorkspace = ws;
+          callback(null, { user: ws.id });
         })
         .catch(err => callback(err));
     },
 
     onMailFrom(address, session, callback) {
-      // Validate sender
-      if (!session.smtpUser) return callback(new Error('Not authenticated'));
+      if (!session.smtpWorkspace) return callback(new Error('Not authenticated'));
       callback();
     },
 
@@ -153,11 +154,11 @@ function createSMTPServer(port, secure = false) {
         const raw = Buffer.concat(chunks);
 
         try {
-          const user = session.smtpUser;
-          if (!user) return callback(new Error('Not authenticated'));
+          const ws = session.smtpWorkspace;
+          if (!ws) return callback(new Error('Not authenticated'));
 
           // Rate limit check
-          const rateCheck = await checkRateLimit(user.id, user.package_id);
+          const rateCheck = await checkRateLimit(ws.id, ws.package_id);
           if (!rateCheck.allowed) {
             return callback(new Error(rateCheck.reason));
           }
@@ -174,13 +175,9 @@ function createSMTPServer(port, secure = false) {
             htmlContent = injectTracking(htmlContent, trackingId, baseUrl);
           }
 
-          // Build bounce address
           const bounceAddress = `bounce+${trackingId}@${config.smtp.hostname}`;
-
-          // Prepare recipients
           const toAddresses = session.envelope.rcptTo.map(r => r.address);
 
-          // Send via Postfix
           const mailOptions = {
             envelope: {
               from: bounceAddress,
@@ -203,10 +200,11 @@ function createSMTPServer(port, secure = false) {
           // Log to database
           const emailRecord = await db.query(
             `INSERT INTO emails
-              (user_id, from_address, from_name, to_addresses, subject, status, tracking_id, size_bytes, ip_address)
-             VALUES ($1,$2,$3,$4,$5,'delivered',$6,$7,$8) RETURNING id`,
+              (workspace_id, user_id, from_address, from_name, to_addresses, subject, status, tracking_id, size_bytes, ip_address)
+             VALUES ($1,$2,$3,$4,$5,$6,'delivered',$7,$8,$9) RETURNING id`,
             [
-              user.id,
+              ws.id,
+              ws.user_id,
               session.envelope.mailFrom.address,
               parsed.from?.value?.[0]?.name || '',
               toAddresses.join(', '),
@@ -223,9 +221,9 @@ function createSMTPServer(port, secure = false) {
             [emailRecord.rows[0].id, session.remoteAddress || null]
           );
 
-          await incrementUsage(user.id);
+          await incrementUsage(ws.id, ws.user_id);
 
-          logger.info(`Email sent: ${trackingId} from ${user.email} to ${toAddresses.join(', ')}`);
+          logger.info(`Email sent: ${trackingId} from ${ws.email} to ${toAddresses.join(', ')}`);
           callback();
         } catch (err) {
           logger.error('SMTP onData error', err);

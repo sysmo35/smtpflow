@@ -7,6 +7,9 @@ export function AuthProvider({ children }) {
   const [user, setUser] = useState(() => {
     try { return JSON.parse(localStorage.getItem('user')); } catch { return null; }
   });
+  const [workspace, setWorkspace] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('workspace')); } catch { return null; }
+  });
   const [loading, setLoading] = useState(true);
   const [impersonating, setImpersonating] = useState(() => {
     try { return JSON.parse(sessionStorage.getItem('impersonating')); } catch { return null; }
@@ -16,42 +19,71 @@ export function AuthProvider({ children }) {
     const token = localStorage.getItem('token');
     if (!token) { setLoading(false); return; }
     getMe()
-      .then(res => setUser(res.data.user))
-      .catch(() => { localStorage.removeItem('token'); localStorage.removeItem('user'); setUser(null); })
+      .then(res => {
+        setUser(res.data.user);
+        if (res.data.workspace) {
+          setWorkspace(res.data.workspace);
+          localStorage.setItem('workspace', JSON.stringify(res.data.workspace));
+        }
+      })
+      .catch(() => {
+        localStorage.removeItem('token');
+        localStorage.removeItem('user');
+        localStorage.removeItem('workspace');
+        setUser(null);
+        setWorkspace(null);
+      })
       .finally(() => setLoading(false));
   }, []);
 
-  const login = (token, userData) => {
+  const login = (token, userData, workspaceData = null) => {
     localStorage.setItem('token', token);
     localStorage.setItem('user', JSON.stringify(userData));
     setUser(userData);
+    if (workspaceData) {
+      localStorage.setItem('workspace', JSON.stringify(workspaceData));
+      setWorkspace(workspaceData);
+    } else {
+      localStorage.removeItem('workspace');
+      setWorkspace(null);
+    }
+  };
+
+  const switchWorkspace = (token, workspaceData) => {
+    localStorage.setItem('token', token);
+    localStorage.setItem('workspace', JSON.stringify(workspaceData));
+    setWorkspace(workspaceData);
   };
 
   const logout = () => {
-    // Se si sta impersonando, torna all'admin
     if (impersonating) {
       stopImpersonating();
       return;
     }
     localStorage.removeItem('token');
     localStorage.removeItem('user');
+    localStorage.removeItem('workspace');
     setUser(null);
+    setWorkspace(null);
   };
 
-  const impersonate = (token, userData, adminData) => {
-    // Salva sessione admin
+  const impersonate = (token, userData, adminData, workspaceData = null) => {
     const adminSession = {
       token: localStorage.getItem('token'),
       user: JSON.parse(localStorage.getItem('user')),
+      workspace: JSON.parse(localStorage.getItem('workspace')),
       adminUser: adminData,
     };
     sessionStorage.setItem('impersonating', JSON.stringify(adminSession));
     setImpersonating(adminSession);
 
-    // Sostituisci con sessione utente
     localStorage.setItem('token', token);
     localStorage.setItem('user', JSON.stringify(userData));
     setUser(userData);
+    if (workspaceData) {
+      localStorage.setItem('workspace', JSON.stringify(workspaceData));
+      setWorkspace(workspaceData);
+    }
   };
 
   const stopImpersonating = () => {
@@ -61,13 +93,20 @@ export function AuthProvider({ children }) {
     localStorage.setItem('token', saved.token);
     localStorage.setItem('user', JSON.stringify(saved.user));
     setUser(saved.user);
+    if (saved.workspace) {
+      localStorage.setItem('workspace', JSON.stringify(saved.workspace));
+      setWorkspace(saved.workspace);
+    } else {
+      localStorage.removeItem('workspace');
+      setWorkspace(null);
+    }
     sessionStorage.removeItem('impersonating');
     setImpersonating(null);
   };
 
   return (
     <AuthContext.Provider value={{
-      user, loading, login, logout,
+      user, workspace, loading, login, logout, switchWorkspace,
       isAdmin: user?.role === 'admin' && !impersonating,
       impersonating,
       impersonate,

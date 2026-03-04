@@ -20,6 +20,7 @@ import AdminBranding from './pages/admin/Branding';
 import AdminSettings from './pages/admin/Settings';
 import AdminSuppression from './pages/admin/Suppression';
 import AdminSystem from './pages/admin/System';
+import AdminWorkspaces from './pages/admin/Workspaces';
 
 // User pages
 import UserDashboard from './pages/user/Dashboard';
@@ -73,6 +74,7 @@ function AppRoutes() {
       <Route path="/admin" element={<ProtectedRoute adminOnly><Layout /></ProtectedRoute>}>
         <Route index element={<AdminDashboard />} />
         <Route path="users" element={<AdminUsers />} />
+        <Route path="workspaces" element={<AdminWorkspaces />} />
         <Route path="packages" element={<AdminPackages />} />
         <Route path="branding" element={<AdminBranding />} />
         <Route path="settings" element={<AdminSettings />} />

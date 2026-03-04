@@ -83,3 +83,15 @@ export const getSystemStats = () => api.get('/admin/system');
 // Auth — password reset
 export const forgotPassword = (data) => api.post('/auth/forgot-password', data);
 export const resetPassword = (data) => api.post('/auth/reset-password', data);
+
+// Workspaces
+export const getWorkspaces = () => api.get('/user/workspaces');
+export const getCurrentWorkspace = () => api.get('/user/workspaces/current');
+export const switchWorkspace = (id) => api.post(`/user/workspaces/${id}/switch`);
+
+// Admin Workspaces
+export const getAdminWorkspaces = (params) => api.get('/admin/workspaces', { params });
+export const updateAdminWorkspace = (id, data) => api.put(`/admin/workspaces/${id}`, data);
+export const resetWorkspaceSmtp = (id) => api.post(`/admin/workspaces/${id}/reset-smtp`);
+export const deleteAdminWorkspace = (id) => api.delete(`/admin/workspaces/${id}`);
+export const getUserWorkspaces = (userId) => api.get(`/admin/users/${userId}/workspaces`);
