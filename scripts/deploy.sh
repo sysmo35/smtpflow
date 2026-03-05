@@ -14,15 +14,16 @@ echo "[1/4] Build frontend..."
 cd "$REPO_DIR/frontend" && npm install --quiet && npm run build --quiet
 
 echo "[2/4] Copia file..."
-cp -r "$REPO_DIR/backend/src" "$INSTALL_DIR/backend/"
-cp -r "$REPO_DIR/frontend/dist/." "$INSTALL_DIR/frontend/dist/"
-cp "$REPO_DIR/scripts/sync-dkim.sh" "$INSTALL_DIR/sync-dkim.sh"
+cp -r "$REPO_DIR/backend/src"         "$INSTALL_DIR/backend/"
+cp -r "$REPO_DIR/backend/migrations"  "$INSTALL_DIR/backend/"
+cp    "$REPO_DIR/backend/package.json" "$INSTALL_DIR/backend/"
+cp -r "$REPO_DIR/frontend/dist/."     "$INSTALL_DIR/frontend/dist/"
+cp "$REPO_DIR/scripts/sync-dkim.sh"      "$INSTALL_DIR/sync-dkim.sh"
 cp "$REPO_DIR/scripts/bounce-handler.sh" "$INSTALL_DIR/bounce-handler.sh"
 chmod +x "$INSTALL_DIR/sync-dkim.sh" "$INSTALL_DIR/bounce-handler.sh"
 
 echo "[3/4] Installa nuove dipendenze backend (se presenti)..."
-cd "$REPO_DIR/backend" && npm install --omit=dev --quiet
-cp -r "$REPO_DIR/backend/node_modules" "$INSTALL_DIR/backend/" 2>/dev/null || true
+cd "$INSTALL_DIR/backend" && npm install --omit=dev --quiet
 
 echo "[4/4] Riavvia app..."
 pm2 restart smtpflow
