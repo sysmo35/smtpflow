@@ -21,6 +21,7 @@ import AdminSettings from './pages/admin/Settings';
 import AdminSuppression from './pages/admin/Suppression';
 import AdminSystem from './pages/admin/System';
 import AdminWorkspaces from './pages/admin/Workspaces';
+import AdminBackup from './pages/admin/Backup';
 
 // User pages
 import UserDashboard from './pages/user/Dashboard';
@@ -81,6 +82,7 @@ function AppRoutes() {
         <Route path="settings" element={<AdminSettings />} />
         <Route path="suppression" element={<AdminSuppression />} />
         <Route path="system" element={<AdminSystem />} />
+        <Route path="backup" element={<AdminBackup />} />
       </Route>
 
       {/* User routes */}

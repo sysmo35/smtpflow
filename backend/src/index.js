@@ -19,6 +19,7 @@ const sendRoutes = require('./routes/send');
 const trackingRoutes = require('./routes/tracking');
 const brandingRoutes = require('./routes/branding');
 const provisionRoutes = require('./routes/provision');
+const backupRoutes = require('./routes/backup');
 
 const app = express();
 
@@ -57,6 +58,7 @@ app.use('/api/user/workspaces', workspacesRoutes);
 app.use('/api/user', userRoutes);
 app.use('/api/send', sendRoutes);
 app.use('/api/provision', provisionRoutes);
+app.use('/api/admin/backup', backupRoutes);
 app.use('/api', brandingRoutes);   // GET /api/branding (pub) + GET|PUT /api/admin/branding
 app.use('/t', trackingRoutes);
 

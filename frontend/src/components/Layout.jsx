@@ -7,7 +7,7 @@ import WorkspaceSwitcher from './WorkspaceSwitcher';
 import {
   LayoutDashboard, Users, Package, Mail, Key, Globe,
   LogOut, Menu, X, Activity, Zap, Palette, ArrowLeftCircle,
-  Sun, Moon, Settings, ShieldOff, Server, Layers,
+  Sun, Moon, Settings, ShieldOff, Server, Layers, HardDrive,
 } from 'lucide-react';
 
 const adminNav = [
@@ -19,6 +19,7 @@ const adminNav = [
   { to: '/admin/suppression', label: 'Suppression', icon: ShieldOff },
   { to: '/admin/system', label: 'Sistema', icon: Server },
   { to: '/admin/settings', label: 'Impostazioni', icon: Settings },
+  { to: '/admin/backup', label: 'Backup & Ripristino', icon: HardDrive },
 ];
 
 const userNav = [

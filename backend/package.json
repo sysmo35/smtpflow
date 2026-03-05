@@ -9,6 +9,7 @@
     "migrate": "node src/database.js migrate"
   },
   "dependencies": {
+    "archiver": "^7.0.1",
     "bcryptjs": "^2.4.3",
     "cheerio": "^1.0.0",
     "cors": "^2.8.5",
@@ -25,6 +26,7 @@
     "redis": "^4.6.14",
     "sharp": "^0.33.4",
     "smtp-server": "^3.13.4",
+    "ssh2-sftp-client": "^10.0.3",
     "uuid": "^10.0.0",
     "winston": "^3.13.0"
   },
